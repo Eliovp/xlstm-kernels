@@ -268,7 +268,7 @@ def enable_optimizations(kernel_mode):
     Returns:
         bool: True if optimizations were enabled, False otherwise
     """
-    global AMD_SUPPORT, is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
+    global AMD_SUPPORT, is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count, _amd_override
     
     # Set kernel mode environment variables if needed
     if kernel_mode == "stock":
@@ -364,18 +364,25 @@ def enable_optimizations(kernel_mode):
                             import mlstm_kernels.triton.amd_optimizations
                             print("✅ Found AMD optimizations module after path adjustment")
                             
-                            # Update global functions
-                            global is_amd, is_cdna3, enable_amd_optimizations
-                            amd_module = mlstm_kernels.triton.amd_optimizations
-                            is_amd = getattr(amd_module, "is_amd", is_amd)
-                            is_cdna3 = getattr(amd_module, "is_cdna3", is_cdna3)
-                            enable_amd_optimizations = getattr(amd_module, "enable_amd_optimizations", enable_amd_optimizations)
-                            
-                            # Update global flag
+                            # Update AMD_SUPPORT flag
                             AMD_SUPPORT = True
                             
-                            # Now try to enable
-                            enable_amd_optimizations()
+                            # Update global functions from the module
+                            amd_module = mlstm_kernels.triton.amd_optimizations
+                            # Update the global references safely
+                            if hasattr(amd_module, "is_amd"):
+                                is_amd = amd_module.is_amd
+                            if hasattr(amd_module, "is_cdna3"):
+                                is_cdna3 = amd_module.is_cdna3
+                            if hasattr(amd_module, "enable_amd_optimizations"):
+                                enable_amd_optimizations = amd_module.enable_amd_optimizations
+                            
+                            # Now try to enable optimizations
+                            if hasattr(amd_module, "enable_amd_optimizations"):
+                                amd_module.enable_amd_optimizations()
+                            else:
+                                print("enable_amd_optimizations function not found in module")
+                                
                             return True
                         except ImportError as ie:
                             print(f"Still couldn't import after path adjustment: {str(ie)}")
@@ -407,18 +414,25 @@ def enable_optimizations(kernel_mode):
                             import mlstm_kernels.triton.amd_optimizations
                             print("✅ Found AMD optimizations module after install")
                             
-                            # Update global functions
-                            global is_amd, is_cdna3, enable_amd_optimizations
-                            amd_module = mlstm_kernels.triton.amd_optimizations
-                            is_amd = getattr(amd_module, "is_amd", is_amd)
-                            is_cdna3 = getattr(amd_module, "is_cdna3", is_cdna3)
-                            enable_amd_optimizations = getattr(amd_module, "enable_amd_optimizations", enable_amd_optimizations)
-                            
-                            # Update global flag
+                            # Update AMD_SUPPORT flag
                             AMD_SUPPORT = True
                             
-                            # Now try to enable
-                            enable_amd_optimizations()
+                            # Update global functions from the module
+                            amd_module = mlstm_kernels.triton.amd_optimizations
+                            # Update the global references safely
+                            if hasattr(amd_module, "is_amd"):
+                                is_amd = amd_module.is_amd
+                            if hasattr(amd_module, "is_cdna3"):
+                                is_cdna3 = amd_module.is_cdna3
+                            if hasattr(amd_module, "enable_amd_optimizations"):
+                                enable_amd_optimizations = amd_module.enable_amd_optimizations
+                            
+                            # Now try to enable optimizations
+                            if hasattr(amd_module, "enable_amd_optimizations"):
+                                amd_module.enable_amd_optimizations()
+                            else:
+                                print("enable_amd_optimizations function not found in module")
+                                
                             return True
                         except ImportError as ie:
                             print(f"Still couldn't import after install: {str(ie)}")
