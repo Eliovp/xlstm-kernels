@@ -219,6 +219,8 @@ def enable_optimizations(kernel_mode):
     Returns:
         bool: True if optimizations were enabled, False otherwise
     """
+    global AMD_SUPPORT  # Move global declaration to the beginning of the function
+    
     # Set kernel mode environment variables if needed
     if kernel_mode == "stock":
         print("\n===== Using stock (original) kernels =====")
@@ -314,7 +316,6 @@ def enable_optimizations(kernel_mode):
                                 is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
                             )
                             print("✅ Successfully imported AMD optimizations after path adjustment")
-                            global AMD_SUPPORT
                             AMD_SUPPORT = True
                             
                             # Now try to enable
@@ -351,7 +352,6 @@ def enable_optimizations(kernel_mode):
                                 is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
                             )
                             print("✅ Successfully imported AMD optimizations after install")
-                            global AMD_SUPPORT
                             AMD_SUPPORT = True
                             
                             # Now try to enable
