@@ -10,6 +10,7 @@ import argparse
 import textwrap
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Union, Any
+import signal
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -751,7 +752,23 @@ def interactive_menu():
                 print(f"Prompt: '{prompt}'")
                 confirm = input("\nConfirm (y/n): ").strip().lower()
                 if confirm == 'y':
-                    compare_kernels(tokens, 0.7, prompt, runs, warmup, batch_size)
+                    # Temporarily suspend keyboard interrupts during comparison
+                    # to prevent interrupting between the stock and hybrid runs
+                    try:
+                        # Save the default handler
+                        default_handler = signal.getsignal(signal.SIGINT)
+                        # Set a temporary handler that ignores the signal
+                        signal.signal(signal.SIGINT, lambda sig, frame: print('\nPlease wait for the comparison to complete...'))
+                        
+                        # Run the comparison
+                        compare_kernels(tokens, 0.7, prompt, runs, warmup, batch_size)
+                        
+                        # Restore the default handler
+                        signal.signal(signal.SIGINT, default_handler)
+                    except Exception as e:
+                        # Make sure we restore the handler even if there's an exception
+                        signal.signal(signal.SIGINT, default_handler)
+                        print(f"\nAn error occurred during comparison: {str(e)}")
                 else:
                     print("Comparison cancelled.")
             
