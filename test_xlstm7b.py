@@ -140,7 +140,7 @@ def get_optimized_config():
     )
     return config
 
-def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=None):
+def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=None, num_runs=3, warmup_tokens=30):
     """
     Run a benchmark with the specified kernel mode.
     
@@ -149,6 +149,8 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
         num_tokens: Number of tokens to generate
         temperature: Temperature for generation
         prompt: Text prompt to use
+        num_runs: Number of benchmark runs to average
+        warmup_tokens: Number of tokens to generate in warmup
     
     Returns:
         Dictionary with generation stats
@@ -307,13 +309,30 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
     prompt_length = input_ids.shape[1]
     
-    # Generate
-    print("Generating...")
-    
+    # Extensive warmup phase
+    print(f"Performing extensive warmup with {warmup_tokens} tokens...")
     with torch.no_grad():
-        # Warmup
-        _ = model.generate(input_ids, max_new_tokens=10, do_sample=True, temperature=temperature)
-        torch.cuda.synchronize()
+        # Multiple warmup rounds
+        for i in range(3):
+            print(f"Warmup round {i+1}/3...")
+            _ = model.generate(
+                input_ids, 
+                max_new_tokens=warmup_tokens, 
+                do_sample=True, 
+                temperature=temperature
+            )
+            torch.cuda.synchronize()
+            # Brief pause to allow GPU to stabilize
+            time.sleep(0.5)
+    
+    # Multi-run performance measurement
+    print(f"Running {num_runs} benchmark iterations...")
+    all_times = []
+    all_tokens_per_second = []
+    
+    for run in range(num_runs):
+        print(f"Benchmark run {run+1}/{num_runs}...")
+        torch.cuda.synchronize()  # Ensure previous operations are complete
         
         # Actual generation with timing
         start_time = time.time()
@@ -323,67 +342,105 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
             do_sample=True,
             temperature=temperature
         )
-        torch.cuda.synchronize()
+        torch.cuda.synchronize()  # Ensure generation is complete
+        
+        end_time = time.time()
+        time_taken = end_time - start_time
+        tokens_generated = output.shape[1] - prompt_length
+        tokens_per_second = tokens_generated / time_taken
+        
+        all_times.append(time_taken)
+        all_tokens_per_second.append(tokens_per_second)
+        
+        print(f"  Run {run+1}: {tokens_per_second:.2f} tokens/sec ({time_taken:.2f}s)")
+        
+        # Small pause between runs to reduce thermal effects
+        if run < num_runs - 1:
+            time.sleep(1.0)
     
-    end_time = time.time()
+    # Calculate statistics
+    avg_time = sum(all_times) / len(all_times)
+    avg_tokens_per_second = sum(all_tokens_per_second) / len(all_tokens_per_second)
     
-    # Get generated text
+    # Calculate variance/std dev if we have multiple runs
+    if len(all_tokens_per_second) > 1:
+        variance = sum((x - avg_tokens_per_second) ** 2 for x in all_tokens_per_second) / len(all_tokens_per_second)
+        std_dev = variance ** 0.5
+        std_dev_percent = (std_dev / avg_tokens_per_second) * 100
+    else:
+        std_dev = 0
+        std_dev_percent = 0
+    
+    # Get the generated text from the last run
     generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
     
-    # Print timing info
-    tokens_generated = output.shape[1] - prompt_length
-    time_taken = end_time - start_time
-    tokens_per_second = tokens_generated / time_taken
-    
-    print(f"\nGenerated text:")
+    print(f"\nGenerated text (from final run):")
     print(generated_text)
     
-    print(f"\nGeneration stats:")
-    print(f"Tokens generated: {tokens_generated}")
-    print(f"Time taken: {time_taken:.2f} seconds")
-    print(f"Tokens per second: {tokens_per_second:.2f}")
+    print(f"\nBenchmark statistics ({num_runs} runs):")
+    print(f"Tokens generated per run: {num_tokens}")
+    print(f"Average time: {avg_time:.2f} seconds")
+    print(f"Average tokens per second: {avg_tokens_per_second:.2f}")
+    print(f"Standard deviation: {std_dev:.2f} tokens/sec ({std_dev_percent:.2f}%)")
+    print(f"Min: {min(all_tokens_per_second):.2f} tokens/sec")
+    print(f"Max: {max(all_tokens_per_second):.2f} tokens/sec")
     
     # Return stats
     return {
         "kernel_mode": kernel_mode,
         "kernel_info": kernel_info,
         "prompt_length": prompt_length,
-        "tokens_generated": tokens_generated,
-        "time_taken": time_taken,
-        "tokens_per_second": tokens_per_second,
+        "tokens_generated": num_tokens,
+        "avg_time_taken": avg_time,
+        "avg_tokens_per_second": avg_tokens_per_second,
+        "std_dev": std_dev,
+        "std_dev_percent": std_dev_percent,
+        "min_tokens_per_second": min(all_tokens_per_second),
+        "max_tokens_per_second": max(all_tokens_per_second),
+        "all_times": all_times,
+        "all_tokens_per_second": all_tokens_per_second,
         "load_time": load_time,
         "device": str(device),
-        "generated_text": generated_text
+        "generated_text": generated_text,
+        "num_runs": num_runs
     }
 
-def compare_kernels(num_tokens=100, temperature=0.7, prompt=None):
+def compare_kernels(num_tokens=100, temperature=0.7, prompt=None, num_runs=3, warmup_tokens=30):
     """Compare stock vs hybrid kernels and print a summary."""
     results = []
     
     # Test stock kernels
-    stock_results = run_benchmark("stock", num_tokens, temperature, prompt)
+    stock_results = run_benchmark("stock", num_tokens, temperature, prompt, num_runs, warmup_tokens)
     results.append(stock_results)
     
-    # Clear CUDA cache between runs
+    # Clear CUDA cache between runs and cool down period
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    print("\nCooling down for 3 seconds before next test...")
+    time.sleep(3.0)
     
     # Test hybrid kernels
-    hybrid_results = run_benchmark("hybrid", num_tokens, temperature, prompt)
+    hybrid_results = run_benchmark("hybrid", num_tokens, temperature, prompt, num_runs, warmup_tokens)
     results.append(hybrid_results)
     
     # Print comparison
-    print("\n" + "="*50)
+    print("\n" + "="*70)
     print("PERFORMANCE COMPARISON: STOCK vs HYBRID KERNELS")
-    print("="*50)
+    print("="*70)
     
-    stock_tps = stock_results["tokens_per_second"]
-    hybrid_tps = hybrid_results["tokens_per_second"]
+    stock_tps = stock_results["avg_tokens_per_second"]
+    hybrid_tps = hybrid_results["avg_tokens_per_second"]
     speedup = (hybrid_tps / stock_tps - 1) * 100
     
-    print(f"Stock kernels:  {stock_tps:.2f} tokens/sec")
-    print(f"Hybrid kernels: {hybrid_tps:.2f} tokens/sec")
+    print(f"Stock kernels:  {stock_tps:.2f} tokens/sec (±{stock_results['std_dev_percent']:.2f}%)")
+    print(f"Hybrid kernels: {hybrid_tps:.2f} tokens/sec (±{hybrid_results['std_dev_percent']:.2f}%)")
     print(f"Speedup: {speedup:.2f}%")
+    
+    # Statistical significance check
+    if (stock_results['std_dev'] > 0 and hybrid_results['std_dev'] > 0 and 
+        abs(stock_tps - hybrid_tps) < (stock_results['std_dev'] + hybrid_results['std_dev'])):
+        print("\n⚠️ NOTE: The performance difference may not be statistically significant")
+        print(f"The difference ({abs(stock_tps - hybrid_tps):.2f}) is less than the combined standard deviation ({stock_results['std_dev'] + hybrid_results['std_dev']:.2f})")
     
     if speedup < 0:
         print(f"\n⚠️ WARNING: The hybrid kernels are slower than stock kernels!")
@@ -394,6 +451,17 @@ def compare_kernels(num_tokens=100, temperature=0.7, prompt=None):
         print("\nCheck the 'Exploring model structure' output above for clues.")
     else:
         print(f"\n✅ Hybrid kernels provide a {speedup:.2f}% speedup!")
+        
+    # Print run-by-run comparison
+    print("\nRun-by-run comparison:")
+    print("Run  | Stock (tokens/s) | Hybrid (tokens/s) | Diff (%) ")
+    print("-"*55)
+    
+    for i in range(num_runs):
+        stock_run = stock_results["all_tokens_per_second"][i]
+        hybrid_run = hybrid_results["all_tokens_per_second"][i]
+        run_speedup = (hybrid_run / stock_run - 1) * 100
+        print(f"{i+1:4} | {stock_run:16.2f} | {hybrid_run:16.2f} | {run_speedup:+8.2f}%")
     
     return results
 
@@ -405,6 +473,8 @@ if __name__ == "__main__":
     parser.add_argument('--temp', type=float, default=0.7, help='Temperature for generation')
     parser.add_argument('--prompt', type=str, default=None, help='Text prompt')
     parser.add_argument('--force-amd', action='store_true', help='Force AMD detection for all runs')
+    parser.add_argument('--runs', type=int, default=3, help='Number of benchmark runs to average')
+    parser.add_argument('--warmup-tokens', type=int, default=30, help='Number of tokens to generate in warmup')
     
     args = parser.parse_args()
     
@@ -414,6 +484,6 @@ if __name__ == "__main__":
         print("Forcing AMD detection for all runs")
     
     if args.mode == 'compare':
-        compare_kernels(args.tokens, args.temp, args.prompt)
+        compare_kernels(args.tokens, args.temp, args.prompt, args.runs, args.warmup_tokens)
     else:
-        run_benchmark(args.mode, args.tokens, args.temp, args.prompt) 
+        run_benchmark(args.mode, args.tokens, args.temp, args.prompt, args.runs, args.warmup_tokens) 
