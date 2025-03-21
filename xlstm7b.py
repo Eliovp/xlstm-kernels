@@ -230,6 +230,11 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     
+    # Ensure the tokenizer has a padding token for batch processing
+    if tokenizer.pad_token is None:
+        print("Setting pad_token to eos_token for batch processing")
+        tokenizer.pad_token = tokenizer.eos_token
+    
     # Load model
     print("Loading model...")
     start_load = time.time()
@@ -553,6 +558,11 @@ def simple_generation(kernel_mode="auto", num_tokens=100, temperature=0.7, promp
     # Load tokenizer
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    
+    # Ensure the tokenizer has a padding token for batch processing
+    if tokenizer.pad_token is None:
+        print("Setting pad_token to eos_token for batch processing")
+        tokenizer.pad_token = tokenizer.eos_token
     
     # Load model
     print("Loading model...")
