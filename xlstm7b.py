@@ -58,6 +58,9 @@ try:
     print(f"\nPython path: {sys.path}")
     print("Attempting to import AMD optimizations...")
     
+    # Declare these as global so they can be accessed throughout the script
+    global AMD_SUPPORT, is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
+    
     # Try direct import with detailed error handling, but be more flexible about what we import
     try:
         # First try to import the module itself to inspect it
@@ -199,8 +202,9 @@ if not AMD_SUPPORT:
             # Check device name for AMD indicators
             if torch.cuda.is_available():
                 device_name = torch.cuda.get_device_name(0).lower()
-                print(f"Device name check: {device_name}")
+                print(f"Detecting GPU: {device_name}")
                 if any(name in device_name for name in ['amd', 'instinct', 'mi', 'cdna', 'radeon']):
+                    print("Detected AMD GPU")
                     return True
         except Exception as e:
             print(f"Error in AMD detection: {str(e)}")
@@ -264,7 +268,7 @@ def enable_optimizations(kernel_mode):
     Returns:
         bool: True if optimizations were enabled, False otherwise
     """
-    global AMD_SUPPORT  # Move global declaration to the beginning of the function
+    global AMD_SUPPORT, is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
     
     # Set kernel mode environment variables if needed
     if kernel_mode == "stock":
@@ -293,7 +297,7 @@ def enable_optimizations(kernel_mode):
         # Explicitly check if we have the optimization module
         if AMD_SUPPORT:
             print("Enabling AMD optimizations...")
-            enable_amd_optimizations()
+            enable_amd_optimizations()  # This is now a global function
             
             # Load the triton kernels explicitly
             try:
@@ -357,10 +361,17 @@ def enable_optimizations(kernel_mode):
                         
                         # Try importing again
                         try:
-                            from mlstm_kernels.triton.amd_optimizations import (
-                                is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
-                            )
-                            print("✅ Successfully imported AMD optimizations after path adjustment")
+                            import mlstm_kernels.triton.amd_optimizations
+                            print("✅ Found AMD optimizations module after path adjustment")
+                            
+                            # Update global functions
+                            global is_amd, is_cdna3, enable_amd_optimizations
+                            amd_module = mlstm_kernels.triton.amd_optimizations
+                            is_amd = getattr(amd_module, "is_amd", is_amd)
+                            is_cdna3 = getattr(amd_module, "is_cdna3", is_cdna3)
+                            enable_amd_optimizations = getattr(amd_module, "enable_amd_optimizations", enable_amd_optimizations)
+                            
+                            # Update global flag
                             AMD_SUPPORT = True
                             
                             # Now try to enable
@@ -393,10 +404,17 @@ def enable_optimizations(kernel_mode):
                             importlib.invalidate_caches()
                             
                             # Try importing
-                            from mlstm_kernels.triton.amd_optimizations import (
-                                is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
-                            )
-                            print("✅ Successfully imported AMD optimizations after install")
+                            import mlstm_kernels.triton.amd_optimizations
+                            print("✅ Found AMD optimizations module after install")
+                            
+                            # Update global functions
+                            global is_amd, is_cdna3, enable_amd_optimizations
+                            amd_module = mlstm_kernels.triton.amd_optimizations
+                            is_amd = getattr(amd_module, "is_amd", is_amd)
+                            is_cdna3 = getattr(amd_module, "is_cdna3", is_cdna3)
+                            enable_amd_optimizations = getattr(amd_module, "enable_amd_optimizations", enable_amd_optimizations)
+                            
+                            # Update global flag
                             AMD_SUPPORT = True
                             
                             # Now try to enable
