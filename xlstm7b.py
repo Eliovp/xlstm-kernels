@@ -58,40 +58,77 @@ try:
     print(f"\nPython path: {sys.path}")
     print("Attempting to import AMD optimizations...")
     
-    # Try direct import with detailed error handling
+    # Try direct import with detailed error handling, but be more flexible about what we import
     try:
-        from mlstm_kernels.triton.amd_optimizations import (
-            is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
-        )
-        print("✅ Successfully imported mlstm_kernels.triton.amd_optimizations")
+        # First try to import the module itself to inspect it
+        import mlstm_kernels.triton.amd_optimizations
+        print("✅ Successfully imported mlstm_kernels.triton.amd_optimizations module")
+        
+        # Get what's available in the module
+        amd_module = mlstm_kernels.triton.amd_optimizations
+        print(f"Available attributes in amd_optimizations: {dir(amd_module)}")
+        
+        # Set up necessary functions, with defaults if not found
+        is_amd = getattr(amd_module, "is_amd", lambda: False)
+        print(f"Found is_amd function: {hasattr(amd_module, 'is_amd')}")
+        
+        is_cdna3 = getattr(amd_module, "is_cdna3", lambda: False)
+        print(f"Found is_cdna3 function: {hasattr(amd_module, 'is_cdna3')}")
+        
+        enable_amd_optimizations = getattr(amd_module, "enable_amd_optimizations", lambda: None)
+        print(f"Found enable_amd_optimizations function: {hasattr(amd_module, 'enable_amd_optimizations')}")
+        
+        # get_hip_device_count might not exist, provide a fallback
+        if hasattr(amd_module, "get_hip_device_count"):
+            get_hip_device_count = amd_module.get_hip_device_count
+            print("Found get_hip_device_count")
+        else:
+            print("get_hip_device_count not found, using fallback")
+            def get_hip_device_count():
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        return torch.cuda.device_count()
+                except:
+                    pass
+                return 0
+        
         AMD_SUPPORT = True
     except ImportError as ie:
         print(f"❌ ImportError: {str(ie)}")
-        # Try alternative import path (in case package is installed differently)
+        # Try alternative approaches if the import fails
         try:
-            print("Trying alternative import path...")
-            import importlib.util
+            print("Looking for AMD detection functions...")
             
-            # Try to find and load the module directly
-            for path in sys.path:
-                potential_path = os.path.join(path, 'mlstm_kernels', 'triton', 'amd_optimizations.py')
-                if os.path.exists(potential_path):
-                    print(f"Found module at: {potential_path}")
-                    spec = importlib.util.spec_from_file_location('amd_optimizations', potential_path)
-                    amd_optimizations = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(amd_optimizations)
-                    
-                    # Extract the needed functions
-                    is_amd = getattr(amd_optimizations, 'is_amd')
-                    is_cdna3 = getattr(amd_optimizations, 'is_cdna3')
-                    enable_amd_optimizations = getattr(amd_optimizations, 'enable_amd_optimizations')
-                    get_hip_device_count = getattr(amd_optimizations, 'get_hip_device_count')
-                    
-                    print("✅ Successfully loaded amd_optimizations via direct file import")
-                    AMD_SUPPORT = True
-                    break
+            # Try to import just the AMD detection module which might exist
+            try:
+                from mlstm_kernels.triton.amd_detection import is_amd, is_cdna3
+                print("✅ Found AMD detection functions in amd_detection module")
+                AMD_DETECTION = True
+            except ImportError:
+                print("❌ Could not import from amd_detection")
+                AMD_DETECTION = False
+            
+            # Define minimal enable_amd_optimizations if we have detection but not optimization
+            if AMD_DETECTION:
+                def enable_amd_optimizations():
+                    print("Using minimal AMD optimizations (detection only)")
+                
+                def get_hip_device_count():
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            return torch.cuda.device_count()
+                    except:
+                        pass
+                    return 0
+                
+                AMD_SUPPORT = True
+                print("✅ Partial AMD support enabled (detection only)")
             else:
-                raise ImportError("Could not find amd_optimizations.py in any path")
+                # Try alternative import path (in case package is installed differently)
+                raise ImportError("No AMD support modules found")
+                
         except Exception as alt_e:
             print(f"❌ Alternative import also failed: {str(alt_e)}")
             
@@ -118,6 +155,14 @@ try:
                         print("Modules in mlstm_kernels.triton:")
                         for loader, name, is_pkg in pkgutil.iter_modules(mlstm_kernels.triton.__path__):
                             print(f"  - {name} ({'package' if is_pkg else 'module'})")
+                            
+                        # If we have amd_optimizations module, try to examine it
+                        if any(name == 'amd_optimizations' for loader, name, is_pkg in pkgutil.iter_modules(mlstm_kernels.triton.__path__)):
+                            print("Found amd_optimizations module, examining content...")
+                            import mlstm_kernels.triton.amd_optimizations
+                            amd_module = mlstm_kernels.triton.amd_optimizations
+                            module_attrs = dir(amd_module)
+                            print(f"amd_optimizations attributes: {[attr for attr in module_attrs if not attr.startswith('_')]}")
                     except Exception as e:
                         print(f"❌ Error listing triton modules: {str(e)}")
                 except ImportError:
