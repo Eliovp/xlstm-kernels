@@ -16,13 +16,130 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Check if AMD optimizations are available
 try:
-    from mlstm_kernels.triton.amd_optimizations import (
-        is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
-    )
-    AMD_SUPPORT = True
-except ImportError:
+    import sys
+    import os
+    
+    # Print Python environment info for debugging
+    print(f"Python executable: {sys.executable}")
+    print(f"Python version: {sys.version}")
+    
+    # Print the contents of site-packages to see if our modules are there
+    print("Checking site-packages for relevant modules...")
+    site_packages = [p for p in sys.path if 'site-packages' in p or 'dist-packages' in p]
+    if site_packages:
+        for site_dir in site_packages:
+            if os.path.exists(site_dir):
+                print(f"Looking in {site_dir}")
+                try:
+                    # Look for mlstm_kernels
+                    mlstm_dir = os.path.join(site_dir, 'mlstm_kernels')
+                    if os.path.exists(mlstm_dir):
+                        print(f"  Found mlstm_kernels at {mlstm_dir}")
+                        # Look for triton subpackage
+                        triton_dir = os.path.join(mlstm_dir, 'triton')
+                        if os.path.exists(triton_dir):
+                            print(f"  Found triton at {triton_dir}")
+                            # Look for amd_optimizations.py
+                            amd_opt_path = os.path.join(triton_dir, 'amd_optimizations.py')
+                            if os.path.exists(amd_opt_path):
+                                print(f"  ✅ Found amd_optimizations.py at {amd_opt_path}")
+                            else:
+                                print(f"  ❌ amd_optimizations.py not found")
+                        else:
+                            print(f"  ❌ triton directory not found")
+                    
+                    # Also check for .egg or .egg-info directories
+                    for item in os.listdir(site_dir):
+                        if 'mlstm_kernels' in item and (item.endswith('.egg') or item.endswith('.egg-info')):
+                            print(f"  Found egg/egg-info: {item}")
+                except Exception as e:
+                    print(f"Error examining {site_dir}: {e}")
+    
+    print(f"\nPython path: {sys.path}")
+    print("Attempting to import AMD optimizations...")
+    
+    # Try direct import with detailed error handling
+    try:
+        from mlstm_kernels.triton.amd_optimizations import (
+            is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
+        )
+        print("✅ Successfully imported mlstm_kernels.triton.amd_optimizations")
+        AMD_SUPPORT = True
+    except ImportError as ie:
+        print(f"❌ ImportError: {str(ie)}")
+        # Try alternative import path (in case package is installed differently)
+        try:
+            print("Trying alternative import path...")
+            import importlib.util
+            
+            # Try to find and load the module directly
+            for path in sys.path:
+                potential_path = os.path.join(path, 'mlstm_kernels', 'triton', 'amd_optimizations.py')
+                if os.path.exists(potential_path):
+                    print(f"Found module at: {potential_path}")
+                    spec = importlib.util.spec_from_file_location('amd_optimizations', potential_path)
+                    amd_optimizations = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(amd_optimizations)
+                    
+                    # Extract the needed functions
+                    is_amd = getattr(amd_optimizations, 'is_amd')
+                    is_cdna3 = getattr(amd_optimizations, 'is_cdna3')
+                    enable_amd_optimizations = getattr(amd_optimizations, 'enable_amd_optimizations')
+                    get_hip_device_count = getattr(amd_optimizations, 'get_hip_device_count')
+                    
+                    print("✅ Successfully loaded amd_optimizations via direct file import")
+                    AMD_SUPPORT = True
+                    break
+            else:
+                raise ImportError("Could not find amd_optimizations.py in any path")
+        except Exception as alt_e:
+            print(f"❌ Alternative import also failed: {str(alt_e)}")
+            
+            # Let's try one last approach - maybe it's installed as a different package
+            try:
+                print("Checking for any triton-related packages...")
+                import pkg_resources
+                for pkg in pkg_resources.working_set:
+                    if 'triton' in pkg.key.lower():
+                        print(f"Found related package: {pkg.key} {pkg.version}")
+            except Exception as pkg_e:
+                print(f"Error checking packages: {str(pkg_e)}")
+            
+            # Try to determine root cause
+            try:
+                import mlstm_kernels
+                print("✅ Base package mlstm_kernels is available")
+                try:
+                    import mlstm_kernels.triton
+                    print("✅ mlstm_kernels.triton is available")
+                    try:
+                        # List contents of the triton directory
+                        import pkgutil
+                        print("Modules in mlstm_kernels.triton:")
+                        for loader, name, is_pkg in pkgutil.iter_modules(mlstm_kernels.triton.__path__):
+                            print(f"  - {name} ({'package' if is_pkg else 'module'})")
+                    except Exception as e:
+                        print(f"❌ Error listing triton modules: {str(e)}")
+                except ImportError:
+                    print("❌ mlstm_kernels.triton is NOT available")
+            except ImportError:
+                print("❌ Base package mlstm_kernels is NOT available")
+            
+            AMD_SUPPORT = False
+            print("WARNING: AMD optimizations module could not be imported")
+    except Exception as e:
+        print(f"❌ Unexpected error during import: {type(e).__name__}: {str(e)}")
+        AMD_SUPPORT = False
+        print("WARNING: AMD optimizations module could not be imported due to unexpected error")
+        
+except Exception as outer_e:
+    print(f"❌ Outer exception during import attempt: {type(outer_e).__name__}: {str(outer_e)}")
     AMD_SUPPORT = False
-    print("WARNING: AMD optimizations module could not be imported")
+    print("WARNING: AMD optimizations module could not be imported due to outer exception")
+
+# If the module wasn't imported, define fallback functions
+if not AMD_SUPPORT:
+    print("⚠️ Using fallback implementations for AMD functions")
     
     def is_amd():
         """Fallback for AMD detection"""
@@ -37,10 +154,11 @@ except ImportError:
             # Check device name for AMD indicators
             if torch.cuda.is_available():
                 device_name = torch.cuda.get_device_name(0).lower()
+                print(f"Device name check: {device_name}")
                 if any(name in device_name for name in ['amd', 'instinct', 'mi', 'cdna', 'radeon']):
                     return True
-        except:
-            pass
+        except Exception as e:
+            print(f"Error in AMD detection: {str(e)}")
         
         # Check environment variables
         import os
@@ -133,8 +251,35 @@ def enable_optimizations(kernel_mode):
             # Load the triton kernels explicitly
             try:
                 # Try to import and initialize triton kernels
-                import mlstm_kernels.triton.chunkwise
-                from mlstm_kernels.torch import get_mlstm_kernel
+                import importlib
+                try:
+                    # First try to ensure the modules are loaded
+                    importlib.reload(importlib.import_module('mlstm_kernels.triton.chunkwise'))
+                    print("Successfully reloaded AMD triton kernels")
+                except Exception as e:
+                    print(f"Couldn't reload triton kernels: {str(e)}")
+                    # Try to import anyway
+                    import mlstm_kernels.triton.chunkwise
+                    
+                try:
+                    from mlstm_kernels.torch import get_mlstm_kernel
+                    print("Successfully loaded mlstm_kernels.torch")
+                except Exception as e:
+                    print(f"Error loading mlstm_kernels.torch: {str(e)}")
+                
+                # Look for AMD specific modules or functions
+                try:
+                    # Check for AMD-specific functions by name
+                    from mlstm_kernels.triton import function_names
+                    print(f"Available triton functions: {dir(function_names)}")
+                    amd_specific_funcs = [name for name in dir(function_names) if 'amd' in name.lower()]
+                    if amd_specific_funcs:
+                        print(f"Found AMD-specific functions: {amd_specific_funcs}")
+                    else:
+                        print("No AMD-specific functions found")
+                except Exception as e:
+                    print(f"Error checking for AMD-specific functions: {str(e)}")
+                
                 print("Successfully loaded AMD-optimized kernels")
                 return True
             except ImportError as e:
@@ -142,7 +287,83 @@ def enable_optimizations(kernel_mode):
                 print("Falling back to standard implementation")
                 return False
         else:
+            # We don't have AMD support, but hybrid was requested
+            # Let's try a more aggressive approach to make it work
             print("AMD optimization module not available")
+            
+            # Attempt one last check for kernels_dir
+            try:
+                # Check if we can find the module in the current directory
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                print(f"Searching for AMD optimizations in {current_dir}")
+                
+                # Try to find a local install of mlstm_kernels
+                local_install = os.path.join(current_dir, 'mlstm_kernels')
+                if os.path.exists(local_install):
+                    print(f"Found local install at {local_install}")
+                    
+                    # Check if this is already in sys.path
+                    parent_dir = os.path.dirname(local_install)
+                    if parent_dir not in sys.path:
+                        print(f"Adding {parent_dir} to sys.path")
+                        sys.path.insert(0, parent_dir)
+                        
+                        # Try importing again
+                        try:
+                            from mlstm_kernels.triton.amd_optimizations import (
+                                is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
+                            )
+                            print("✅ Successfully imported AMD optimizations after path adjustment")
+                            global AMD_SUPPORT
+                            AMD_SUPPORT = True
+                            
+                            # Now try to enable
+                            enable_amd_optimizations()
+                            return True
+                        except ImportError as ie:
+                            print(f"Still couldn't import after path adjustment: {str(ie)}")
+                
+                # Try installing from source
+                install_choice = input("Would you like to try installing AMD optimizations? (y/n): ")
+                if install_choice.lower() == 'y':
+                    try:
+                        import subprocess
+                        print("Attempting to install AMD optimizations...")
+                        
+                        # First try installing the kernels package itself
+                        result = subprocess.run(
+                            [sys.executable, '-m', 'pip', 'install', '-e', current_dir],
+                            capture_output=True,
+                            text=True
+                        )
+                        print(f"Install output: {result.stdout}")
+                        if result.stderr:
+                            print(f"Install errors: {result.stderr}")
+                        
+                        # Then try to import again
+                        try:
+                            # Force Python to look for the module again
+                            import importlib
+                            importlib.invalidate_caches()
+                            
+                            # Try importing
+                            from mlstm_kernels.triton.amd_optimizations import (
+                                is_amd, is_cdna3, enable_amd_optimizations, get_hip_device_count
+                            )
+                            print("✅ Successfully imported AMD optimizations after install")
+                            global AMD_SUPPORT
+                            AMD_SUPPORT = True
+                            
+                            # Now try to enable
+                            enable_amd_optimizations()
+                            return True
+                        except ImportError as ie:
+                            print(f"Still couldn't import after install: {str(ie)}")
+                    except Exception as e:
+                        print(f"Error during installation: {str(e)}")
+            except Exception as e:
+                print(f"Error during local module search: {str(e)}")
+            
             return False
             
     else:  # auto
