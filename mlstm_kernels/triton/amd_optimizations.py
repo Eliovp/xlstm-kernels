@@ -9,8 +9,72 @@ import torch
 import os
 from typing import Callable, Dict, Optional, Tuple, Union
 
+# Global flag to track if optimizations have been enabled
+_amd_optimizations_enabled = False
+
+def enable_amd_optimizations() -> bool:
+    """
+    Explicitly enable AMD optimizations and configure environment variables.
+    
+    Returns:
+        bool: True if AMD optimizations were successfully enabled
+    """
+    global _amd_optimizations_enabled
+    
+    # Check if we're on AMD hardware
+    is_amd_gpu = is_amd()
+    
+    if is_amd_gpu:
+        print("Enabling AMD optimizations for xLSTM...")
+        
+        # Set environment variables to enable optimizations
+        os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "0"
+        os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "0"
+        
+        # For ROCm/HIP
+        if "HIP_VISIBLE_DEVICES" in os.environ:
+            print(f"Using HIP device: {os.environ['HIP_VISIBLE_DEVICES']}")
+        
+        # Set specific optimizations based on architecture
+        if is_cdna3():
+            print("Detected MI300 GPU - applying CDNA3-specific optimizations")
+            
+            # CDNA3 specific optimizations
+            os.environ["AMD_CDNA3_OPTIMIZATIONS"] = "1"
+            
+            # These have been tuned for MI300X specifically
+            os.environ["AMD_PREFER_HYBRID_KERNELS"] = "1"
+            os.environ["XLSTM_OPTIMIZE_BATCH"] = "1"
+        
+        _amd_optimizations_enabled = True
+        return True
+    else:
+        print("Not running on AMD GPU, optimizations not enabled")
+        _amd_optimizations_enabled = False
+        return False
+
+def are_amd_optimizations_enabled() -> bool:
+    """
+    Check if AMD optimizations have been explicitly enabled.
+    
+    Returns:
+        bool: True if optimizations have been enabled
+    """
+    global _amd_optimizations_enabled
+    
+    # Also check environment in case it was set elsewhere
+    env_disabled = os.environ.get("DISABLE_AMD_OPTIMIZATIONS", "0") == "1"
+    
+    return _amd_optimizations_enabled and not env_disabled
+
 def is_amd() -> bool:
     """Check if the current hardware is AMD with HIP backend."""
+    # Check if we're forcing a specific mode for testing
+    if os.environ.get("FORCE_AMD_DETECTION", "0") == "1":
+        return True
+    if os.environ.get("FORCE_AMD_DETECTION", "0") == "0":
+        return False
+        
     if torch.cuda.is_available():
         device_name = torch.cuda.get_device_name(0).lower()
         return "amd" in device_name or "mi" in device_name or "instinct" in device_name
