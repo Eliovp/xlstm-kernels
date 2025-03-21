@@ -1,0 +1,211 @@
+root@mi300x:/app/xlstm-kernels# HIP_VISIBLE_DEVICES=6 python test_xlstm7b.py --mode compare --force-amd --runs 5 --tokens 250 --warmup-tokens 75
+Forcing AMD detection for all runs
+
+===== Environment Information =====
+Transformers version: 4.47.0.dev0
+Transformers path: /usr/local/lib/python3.12/dist-packages/transformers-4.47.0.dev0-py3.12.egg/transformers/__init__.py
+✅ Using NX-AI transformers fork with xLSTM integration
+PyTorch version: 2.7.0a0+git6c0e746
+CUDA available: True
+CUDA device count: 1
+CUDA device name: AMD Instinct MI300X
+HIP_VISIBLE_DEVICES: 6
+AMD GPU detected: True
+AMD optimization environment variables:
+  FORCE_AMD_DETECTION=1
+========================================
+
+===== Testing with stock (original) kernels =====
+Environment variables set for this run:
+  XLSTM_FORCE_STOCK_KERNELS=1
+  DISABLE_AMD_OPTIMIZATIONS=1
+  FORCE_AMD_DETECTION=0
+Loading tokenizer...
+Loading model...
+Loading checkpoint shards: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 6/6 [00:16<00:00,  2.82s/it]
+Model loaded on cuda:0 in 20.08 seconds
+Set block 0 kernels to: chunkwise--native_autograd
+Set block 1 kernels to: chunkwise--native_autograd
+Set block 2 kernels to: chunkwise--native_autograd
+Set block 3 kernels to: chunkwise--native_autograd
+Set block 4 kernels to: chunkwise--native_autograd
+Set block 5 kernels to: chunkwise--native_autograd
+Set block 6 kernels to: chunkwise--native_autograd
+Set block 7 kernels to: chunkwise--native_autograd
+Set block 8 kernels to: chunkwise--native_autograd
+Set block 9 kernels to: chunkwise--native_autograd
+Set block 10 kernels to: chunkwise--native_autograd
+Set block 11 kernels to: chunkwise--native_autograd
+Set block 12 kernels to: chunkwise--native_autograd
+Set block 13 kernels to: chunkwise--native_autograd
+Set block 14 kernels to: chunkwise--native_autograd
+Set block 15 kernels to: chunkwise--native_autograd
+Set block 16 kernels to: chunkwise--native_autograd
+Set block 17 kernels to: chunkwise--native_autograd
+Set block 18 kernels to: chunkwise--native_autograd
+Set block 19 kernels to: chunkwise--native_autograd
+Set block 20 kernels to: chunkwise--native_autograd
+Set block 21 kernels to: chunkwise--native_autograd
+Set block 22 kernels to: chunkwise--native_autograd
+Set block 23 kernels to: chunkwise--native_autograd
+Set block 24 kernels to: chunkwise--native_autograd
+Set block 25 kernels to: chunkwise--native_autograd
+Set block 26 kernels to: chunkwise--native_autograd
+Set block 27 kernels to: chunkwise--native_autograd
+Set block 28 kernels to: chunkwise--native_autograd
+Set block 29 kernels to: chunkwise--native_autograd
+Set block 30 kernels to: chunkwise--native_autograd
+Set block 31 kernels to: chunkwise--native_autograd
+Successfully set stock kernels manually
+Exploring model structure for kernel info:
+Kernel info: Could not determine kernel configuration: No model.model attribute found
+Prompt: In a world where technology and nature coexist,
+Performing extensive warmup with 75 tokens...
+Warmup round 1/3...
+Warmup round 2/3...
+Warmup round 3/3...
+Running 5 benchmark iterations...
+Benchmark run 1/5...
+  Run 1: 21.09 tokens/sec (11.85s)
+Benchmark run 2/5...
+  Run 2: 24.25 tokens/sec (10.31s)
+Benchmark run 3/5...
+  Run 3: 23.67 tokens/sec (10.56s)
+Benchmark run 4/5...
+  Run 4: 22.12 tokens/sec (11.30s)
+Benchmark run 5/5...
+  Run 5: 21.55 tokens/sec (11.60s)
+
+Generated text (from final run):
+In a world where technology and nature coexist, a group of robots who were abandoned in a forest take on the challenge of restoring the environment. These robots, who have been designed to mimic the movements and abilities of animals, must now use their skills to bring life back to the once thriving forest. Can they overcome the obstacles and challenges that lie ahead, and succeed in reviving the forest?
+As the robots set out on their mission, they quickly realize that the forest is in dire need of help. Trees are dead, rivers are polluted, and the once diverse wildlife is nowhere to be seen. The robots know that they must act fast if they want to restore the forest to its former glory.
+
+The robots split up into teams, each with a specific task. One team focuses on cleaning up the pollution in the rivers, using advanced filtration systems to purify the water. Another team works on planting new trees and shrubs, using specialised equipment to make sure the plants grow strong and healthy.
+
+Benchmark statistics (5 runs):
+Tokens generated per run: 250
+Average time: 11.13 seconds
+Average tokens per second: 22.53
+Standard deviation: 1.22 tokens/sec (5.41%)
+Min: 21.09 tokens/sec
+Max: 24.25 tokens/sec
+
+Cooling down for 3 seconds before next test...
+
+===== Environment Information =====
+Transformers version: 4.47.0.dev0
+Transformers path: /usr/local/lib/python3.12/dist-packages/transformers-4.47.0.dev0-py3.12.egg/transformers/__init__.py
+✅ Using NX-AI transformers fork with xLSTM integration
+PyTorch version: 2.7.0a0+git6c0e746
+CUDA available: True
+CUDA device count: 1
+CUDA device name: AMD Instinct MI300X
+HIP_VISIBLE_DEVICES: 6
+AMD GPU detected: False
+AMD optimization environment variables:
+  XLSTM_FORCE_STOCK_KERNELS=1
+  DISABLE_AMD_OPTIMIZATIONS=1
+  FORCE_AMD_DETECTION=0
+========================================
+
+===== Testing with AMD hybrid-optimized kernels =====
+Enabling AMD optimizations for xLSTM...
+Using HIP device: 6
+Detected MI300 GPU - applying CDNA3-specific optimizations
+Environment variables set for this run:
+  XLSTM_FORCE_STOCK_KERNELS=0
+  DISABLE_AMD_OPTIMIZATIONS=0
+  FORCE_AMD_DETECTION=1
+  AMD_CDNA3_OPTIMIZATIONS=1
+  AMD_PREFER_HYBRID_KERNELS=1
+  XLSTM_OPTIMIZE_BATCH=1
+Loading tokenizer...
+Loading model...
+Loading checkpoint shards: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 6/6 [00:17<00:00,  2.92s/it]
+Model loaded on cuda:0 in 17.88 seconds
+Set block 0 kernels to: chunkwise--triton_xl_chunk
+Set block 1 kernels to: chunkwise--triton_xl_chunk
+Set block 2 kernels to: chunkwise--triton_xl_chunk
+Set block 3 kernels to: chunkwise--triton_xl_chunk
+Set block 4 kernels to: chunkwise--triton_xl_chunk
+Set block 5 kernels to: chunkwise--triton_xl_chunk
+Set block 6 kernels to: chunkwise--triton_xl_chunk
+Set block 7 kernels to: chunkwise--triton_xl_chunk
+Set block 8 kernels to: chunkwise--triton_xl_chunk
+Set block 9 kernels to: chunkwise--triton_xl_chunk
+Set block 10 kernels to: chunkwise--triton_xl_chunk
+Set block 11 kernels to: chunkwise--triton_xl_chunk
+Set block 12 kernels to: chunkwise--triton_xl_chunk
+Set block 13 kernels to: chunkwise--triton_xl_chunk
+Set block 14 kernels to: chunkwise--triton_xl_chunk
+Set block 15 kernels to: chunkwise--triton_xl_chunk
+Set block 16 kernels to: chunkwise--triton_xl_chunk
+Set block 17 kernels to: chunkwise--triton_xl_chunk
+Set block 18 kernels to: chunkwise--triton_xl_chunk
+Set block 19 kernels to: chunkwise--triton_xl_chunk
+Set block 20 kernels to: chunkwise--triton_xl_chunk
+Set block 21 kernels to: chunkwise--triton_xl_chunk
+Set block 22 kernels to: chunkwise--triton_xl_chunk
+Set block 23 kernels to: chunkwise--triton_xl_chunk
+Set block 24 kernels to: chunkwise--triton_xl_chunk
+Set block 25 kernels to: chunkwise--triton_xl_chunk
+Set block 26 kernels to: chunkwise--triton_xl_chunk
+Set block 27 kernels to: chunkwise--triton_xl_chunk
+Set block 28 kernels to: chunkwise--triton_xl_chunk
+Set block 29 kernels to: chunkwise--triton_xl_chunk
+Set block 30 kernels to: chunkwise--triton_xl_chunk
+Set block 31 kernels to: chunkwise--triton_xl_chunk
+Successfully set hybrid kernels manually
+Exploring model structure for kernel info:
+Kernel info: Could not determine kernel configuration: No model.model attribute found
+Prompt: In a world where technology and nature coexist,
+Performing extensive warmup with 75 tokens...
+Warmup round 1/3...
+Warmup round 2/3...
+Warmup round 3/3...
+Running 5 benchmark iterations...
+Benchmark run 1/5...
+  Run 1: 23.59 tokens/sec (10.60s)
+Benchmark run 2/5...
+  Run 2: 23.27 tokens/sec (10.74s)
+Benchmark run 3/5...
+  Run 3: 22.95 tokens/sec (10.89s)
+Benchmark run 4/5...
+  Run 4: 23.30 tokens/sec (10.73s)
+Benchmark run 5/5...
+  Run 5: 23.08 tokens/sec (10.83s)
+
+Generated text (from final run):
+In a world where technology and nature coexist, humans are not the only species that are affected by the changes in our surroundings. Animals are also feeling the effects of these changes, and it is having a huge impact on their well-being and survival.
+In this article, we will explore the ways in which animals are affected by climate change and how it is impacting their lives.
+Animals are feeling the effects of climate change
+The effects of climate change on animals are already being felt around the world. Rising temperatures, changing weather patterns, and increased frequency of
+
+Benchmark statistics (5 runs):
+Tokens generated per run: 250
+Average time: 10.76 seconds
+Average tokens per second: 23.24
+Standard deviation: 0.22 tokens/sec (0.93%)
+Min: 22.95 tokens/sec
+Max: 23.59 tokens/sec
+
+======================================================================
+PERFORMANCE COMPARISON: STOCK vs HYBRID KERNELS
+======================================================================
+Stock kernels:  22.53 tokens/sec (±5.41%)
+Hybrid kernels: 23.24 tokens/sec (±0.93%)
+Speedup: 3.13%
+
+⚠️ NOTE: The performance difference may not be statistically significant
+The difference (0.70) is less than the combined standard deviation (1.44)
+
+✅ Hybrid kernels provide a 3.13% speedup!
+
+Run-by-run comparison:
+Run  | Stock (tokens/s) | Hybrid (tokens/s) | Diff (%)
+-------------------------------------------------------
+   1 |            21.09 |            23.59 |   +11.85%
+   2 |            24.25 |            23.27 |    -4.01%
+   3 |            23.67 |            22.95 |    -3.04%
+   4 |            22.12 |            23.30 |    +5.34%
+   5 |            21.55 |            23.08 |    +7.12%
