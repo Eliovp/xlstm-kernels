@@ -13,20 +13,7 @@ This guide provides step-by-step instructions for testing the xLSTM-7B model wit
 
 This project provides AMD-optimized kernels for the xLSTM library. There are several ways to set up the environment:
 
-### Option 1: Install using the installation script (Recommended)
-
-This will install both the AMD-optimized kernels and the modified xLSTM library:
-
-```bash
-# Clone the repository
-git clone https://github.com/Eliovp/xlstm-kernels.git
-cd xlstm-kernels
-
-# Run the installation script
-python install.py
-```
-
-### Option 2: Use setup.py directly
+### Option 1: Use setup.py directly (Recommended)
 
 Our setup.py file has built-in commands to install both packages:
 
@@ -42,7 +29,7 @@ python setup.py install
 python setup.py develop
 ```
 
-### Option 3: Manual Installation
+### Option 2: Manual Installation
 
 If you prefer to install the packages manually:
 
@@ -61,7 +48,7 @@ pip install -e .
 cd ..
 ```
 
-### Option 4: Apply optimizations to an existing xLSTM installation
+### Option 3: Apply optimizations to an existing xLSTM installation
 
 If you already have the original xLSTM library installed separately and want to apply our optimizations to it:
 
