@@ -151,3 +151,37 @@ def get_optimized_kernel_config(
         "sequence_kernel": "native_sequence__native",
         "step_kernel": "native"
     }
+
+def get_head_dim_block_size(head_dim: int, min_block_size: int = 32) -> int:
+    """
+    Get the optimal block size for the head dimension.
+    
+    Args:
+        head_dim: Head dimension
+        min_block_size: Minimum block size
+        
+    Returns:
+        Optimal block size for the head dimension
+    """
+    # Find the largest power of 2 that divides head_dim
+    if is_power_of_2(head_dim):
+        return max(min_block_size, head_dim)
+    
+    # Find the largest power of 2 that is <= head_dim
+    block_size = min_block_size
+    while block_size * 2 <= head_dim:
+        block_size *= 2
+    
+    # AMD-specific optimizations
+    if is_amd_hardware() and is_amd_mi300x:
+        # For MI300X, we have found these block sizes to work well
+        if head_dim == 64:
+            return 64
+        elif head_dim == 128:
+            return 64
+        elif head_dim <= 32:
+            return 32
+        else:
+            return block_size
+    
+    return block_size
