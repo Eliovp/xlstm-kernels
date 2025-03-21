@@ -295,3 +295,91 @@ Please cite our papers if you use this codebase, or otherwise find our work valu
       url={https://arxiv.org/abs/2405.04517},
 }
 ```
+
+# xLSTM Kernels with AMD Optimizations
+
+This repository contains optimized kernels for the [xLSTM library](https://github.com/NX-AI/xLSTM) with specific optimizations for AMD GPUs, particularly the MI300X accelerator.
+
+## Key Features
+
+- **Automatic AMD hardware detection**: The library automatically detects AMD GPUs and applies appropriate optimizations
+- **Batch-aware kernel selection**: Dynamically selects optimal kernel configurations based on batch size and sequence length
+- **Hybrid kernel approach**: Combines native and Triton kernels for best performance on AMD hardware
+- **Parameter mapping**: Robust handling of model parameter loading between different naming conventions
+- **Benchmarking tools**: Comprehensive benchmarking tools to compare different kernel configurations
+
+## Setup Options
+
+This project can be used in two ways:
+
+### Option 1: Use our integrated solution (Recommended)
+
+This approach uses our repository which includes a modified version of the xLSTM library with AMD optimizations already integrated:
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/xlstm-kernels.git
+cd xlstm-kernels
+
+# Install all dependencies including the modified xLSTM
+pip install -e .
+
+# Install additional dependencies
+pip install safetensors transformers matplotlib
+```
+
+### Option 2: Apply our optimizations to an existing xLSTM installation
+
+If you already have the original xLSTM library installed and want to apply our optimizations:
+
+```bash
+# Clone the kernels repository
+git clone https://github.com/yourusername/xlstm-kernels.git
+cd xlstm-kernels
+
+# Install just the kernels package
+pip install -e .
+
+# Clone the original xLSTM repository
+cd ..
+git clone https://github.com/NX-AI/xLSTM.git
+cd xLSTM
+
+# Apply the AMD optimization patches
+cp -r ../xlstm-kernels/mlstm_kernels ./
+patch -p1 < ../xlstm-kernels/patches/amd_optimizations.patch
+
+# Install xLSTM
+pip install -e .
+```
+
+## Documentation
+
+- [Quick Start Guide](docs/quickstart_guide.md): Step-by-step instructions for getting started
+- [Installation Guide](docs/installation_guide.md): Detailed installation instructions
+- [AMD Optimization Guide](docs/amd_optimization_guide.md): Technical details about the AMD optimizations
+
+## Test Scripts
+
+- `test_xlstm_stock.py`: Test the model with stock kernels
+- `test_xlstm_hybrid_full.py`: Test the model with AMD-optimized hybrid kernels
+- `benchmark_comparison.py`: Compare different kernel configurations
+
+## Performance
+
+Our benchmarks show that:
+
+- For small batch sizes (1-2): Hybrid kernels provide the best performance on AMD hardware
+- For medium batch sizes (3-8): AMD-optimized kernels show significant speedup
+- For large batch sizes (>8): Native kernels provide robust performance
+
+The automatic kernel selection will choose the best configuration based on your input dimensions.
+
+## License
+
+This project is licensed under the same license as the original xLSTM library.
+
+## Acknowledgements
+
+- The original [xLSTM library](https://github.com/NX-AI/xLSTM) by NX-AI
+- AMD ROCm team for their support and guidance

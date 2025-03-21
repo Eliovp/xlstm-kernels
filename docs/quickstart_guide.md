@@ -11,24 +11,70 @@ This guide provides step-by-step instructions for testing the xLSTM-7B model wit
 
 ## Installation
 
-1. **Clone the repository:**
+This project uses a modified version of the xLSTM library with AMD hardware detection and optimization capabilities. There are two ways to set up the environment:
+
+### Option 1: Use our repository with integrated xLSTM (Recommended)
+
+This approach uses our version of xLSTM that already has the AMD optimizations integrated:
 
 ```bash
+# Clone the repository
 git clone https://github.com/yourusername/xlstm-kernels.git
 cd xlstm-kernels
+
+# Install all dependencies including our modified xLSTM
+pip install -e .
+
+# Install additional dependencies
+pip install safetensors transformers matplotlib
 ```
 
-2. **Install dependencies:**
+### Option 2: Patch an existing xLSTM installation
+
+If you already have the original xLSTM library installed and want to apply our optimizations:
 
 ```bash
+# Clone the kernels repository
+git clone https://github.com/yourusername/xlstm-kernels.git
+cd xlstm-kernels
+
+# Install just the kernels package
 pip install -e .
-pip install safetensors transformers matplotlib
+
+# Clone the original xLSTM repository
+cd ..
+git clone https://github.com/NX-AI/xLSTM.git
+cd xLSTM
+
+# Apply the AMD optimization patches
+cp -r ../xlstm-kernels/mlstm_kernels ./
+patch -p1 < ../xlstm-kernels/patches/amd_optimizations.patch
+
+# Install xLSTM
+pip install -e .
 ```
 
 3. **Download the model weights (if not already cached):**
 
 ```bash
 python -c "from transformers import AutoModel; AutoModel.from_pretrained('NX-AI/xLSTM-7b')"
+```
+
+## Project Structure
+
+Our implementation has the following structure:
+
+```
+xlstm-kernels/
+├── mlstm_kernels/       # AMD-optimized kernels
+│   └── triton/
+│       ├── amd_detection.py           # AMD hardware detection
+│       ├── amd_batch_aware.py         # Batch-aware kernel selection
+│       └── kernel_param_heuristics.py # Kernel parameter optimization
+├── xlstm/              # Modified xLSTM library with AMD detection
+├── docs/               # Documentation
+├── test_xlstm_*.py     # Various test scripts
+└── benchmark_comparison.py  # Benchmark tool
 ```
 
 ## Testing with Stock Kernels
@@ -174,6 +220,15 @@ If you encounter any issues:
 3. **Model mismatch**: Ensure library versions match
    ```bash
    pip install --upgrade transformers safetensors
+   ```
+
+4. **xLSTM library not found**: Make sure you've installed the modified xLSTM library
+   ```bash
+   # If using Option 1 (integrated approach)
+   pip install -e /path/to/xlstm-kernels
+
+   # If using Option 2 (separate libraries)
+   pip install -e /path/to/xLSTM
    ```
 
 ## Next Steps

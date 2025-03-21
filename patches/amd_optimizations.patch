@@ -1,0 +1,102 @@
+diff --git a/xlstm/xlstm_large/model.py b/xlstm/xlstm_large/model.py
+index 1234567..abcdef0 100644
+--- a/xlstm/xlstm_large/model.py
++++ b/xlstm/xlstm_large/model.py
+@@ -9,6 +9,18 @@ import torch
+ import torch.nn as nn
+ import torch.nn.functional as F
+ 
++# Import our AMD-specific optimizations
++try:
++    from mlstm_kernels.triton.amd_detection import is_amd_gpu, is_mi300x
++    from mlstm_kernels.triton.kernel_param_heuristics import get_optimized_kernel_config
++    is_amd = is_amd_gpu()
++    is_amd_mi300x = is_mi300x()
++except ImportError:
++    is_amd = False
++    is_amd_mi300x = False
++    def get_optimized_kernel_config(*args, **kwargs):
++        return {"chunkwise_kernel": "chunkwise--native_autograd", "sequence_kernel": "native_sequence__native", "step_kernel": "native"}
++
+ @dataclass
+ class xLSTMLargeConfig:
+     embedding_dim: int = 4096
+@@ -28,6 +40,27 @@ class xLSTMLargeConfig:
+     ffn_round_up_to_multiple_of: int = 64
+     gate_soft_cap: float = 15.0
+     output_logit_soft_cap: float = 30.0
++    weight_mode: str = "single"
++    
++    def __post_init__(self):
++        # Automatic selection of optimized kernels for AMD hardware
++        if is_amd:
++            # Get head dimension
++            head_dim = self.embedding_dim // self.num_heads
++            
++            # For MI300X, we have specific optimizations
++            if is_amd_mi300x:
++                # Use our batch-aware kernel selection
++                # Default to batch size 1 for initial config
++                optimal_config = get_optimized_kernel_config(1, 2048, head_dim)
++                
++                # Apply the optimal configuration if it's for AMD
++                if optimal_config and "chunkwise_kernel" in optimal_config:
++                    logging.info(f"Using AMD-optimized kernel configuration: {optimal_config}")
++                    self.chunkwise_kernel = optimal_config["chunkwise_kernel"]
++                    self.sequence_kernel = optimal_config["sequence_kernel"]
++                    self.step_kernel = optimal_config["step_kernel"]
++
+ 
+ class xLSTMLarge(nn.Module):
+     def __init__(self, config: xLSTMLargeConfig):
+@@ -37,6 +70,12 @@ class xLSTMLarge(nn.Module):
+         # Initialize embeddings, layers, etc.
+         # ...
+ 
++        # For AMD hardware, enable dynamic optimization during forward passes
++        self.is_amd = is_amd
++        self.is_amd_mi300x = is_amd_mi300x
++        
++        # Continue with original initialization
++        # ...
+     
+     def forward(self, x):
+         # Input shape: (batch_size, seq_len)
+@@ -44,6 +83,14 @@ class xLSTMLarge(nn.Module):
+         # Type: torch.LongTensor
+         batch_size, seq_len = x.shape
+ 
++        # For AMD hardware, dynamically select optimal kernels based on input size
++        if self.is_amd and self.is_amd_mi300x:
++            if batch_size > 1 or seq_len > 1024:
++                # Get optimal kernel configuration for this batch size and sequence length
++                optimal_config = get_optimized_kernel_config(batch_size, seq_len, self.config.embedding_dim // self.config.num_heads)
++                # Apply configuration if different from current
++                if optimal_config and optimal_config["chunkwise_kernel"] != self.config.chunkwise_kernel:
++                    self._update_kernel_config(optimal_config)
+         # Continue with original forward pass
+         # ...
+ 
+@@ -51,3 +98,22 @@ class xLSTMLarge(nn.Module):
+         # Return results
+         # ...
+         return logits, state
++
++    def _update_kernel_config(self, optimal_config):
++        """
++        Update kernel configuration based on input dimensions.
++        
++        Args:
++            optimal_config: Dictionary with optimal kernel settings
++        """
++        if not hasattr(self, 'config'):
++            return
++            
++        # Only update if different from current config
++        if (optimal_config["chunkwise_kernel"] != self.config.chunkwise_kernel or
++            optimal_config["sequence_kernel"] != self.config.sequence_kernel or
++            optimal_config["step_kernel"] != self.config.step_kernel):
++            
++            self.config.chunkwise_kernel = optimal_config["chunkwise_kernel"]
++            self.config.sequence_kernel = optimal_config["sequence_kernel"]
++            self.config.step_kernel = optimal_config["step_kernel"] 

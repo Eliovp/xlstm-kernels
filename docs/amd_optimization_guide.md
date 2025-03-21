@@ -201,10 +201,9 @@ output = model(input_ids)
 Future optimization opportunities include:
 
 1. Exploring custom MLIR/ROCm kernels specifically for MI300X architecture
-2. Implementing attention and feed-forward optimizations specific to AMD hardware
-3. More granular kernel selection based on head dimensions and other model parameters
-4. Memory optimization techniques for larger batch sizes
-5. Mixed precision training/inference optimizations
+2. More granular kernel selection based on head dimensions and other model parameters
+3. Memory optimization techniques for larger batch sizes
+4. Mixed precision training/inference optimizations
 
 ## Acknowledgments
 
