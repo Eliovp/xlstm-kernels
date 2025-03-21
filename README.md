@@ -310,46 +310,54 @@ This repository contains optimized kernels for the [xLSTM library](https://githu
 
 ## Setup Options
 
-This project can be used in two ways:
+### Option 1: Install from GitHub (Recommended)
 
-### Option 1: Use our integrated solution (Recommended)
-
-This approach uses our repository which includes a modified version of the xLSTM library with AMD optimizations already integrated:
+This will install both the AMD-optimized kernels and the modified xLSTM library:
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/xlstm-kernels.git
-cd xlstm-kernels
+# Install directly from GitHub
+pip install git+https://github.com/Eliovp/xlstm-kernels.git
 
-# Install all dependencies including the modified xLSTM
-pip install -e .
-
-# Install additional dependencies
-pip install safetensors transformers matplotlib
+# This will automatically install:
+# 1. The xlstm-kernels package with AMD optimizations
+# 2. The modified xLSTM library with AMD optimizations applied
 ```
 
-### Option 2: Apply our optimizations to an existing xLSTM installation
+### Option 2: Development Installation
 
-If you already have the original xLSTM library installed and want to apply our optimizations:
+If you want to modify the code or contribute:
+
+```bash
+# Clone the repositories
+git clone https://github.com/Eliovp/xlstm-kernels.git
+cd xlstm-kernels
+
+# Install in development mode
+pip install -e .
+
+# This will automatically install the modified xLSTM library as a dependency
+```
+
+### Option 3: Apply optimizations to an existing xLSTM installation
+
+If you already have the original xLSTM library installed separately and want to apply our optimizations to it:
 
 ```bash
 # Clone the kernels repository
-git clone https://github.com/yourusername/xlstm-kernels.git
+git clone https://github.com/Eliovp/xlstm-kernels.git
 cd xlstm-kernels
 
 # Install just the kernels package
 pip install -e .
 
-# Clone the original xLSTM repository
-cd ..
-git clone https://github.com/NX-AI/xLSTM.git
-cd xLSTM
+# Go to your existing xLSTM installation directory
+cd /path/to/your/existing/xLSTM
 
 # Apply the AMD optimization patches
-cp -r ../xlstm-kernels/mlstm_kernels ./
-patch -p1 < ../xlstm-kernels/patches/amd_optimizations.patch
+cp -r /path/to/xlstm-kernels/mlstm_kernels ./
+patch -p1 < /path/to/xlstm-kernels/patches/amd_optimizations.patch
 
-# Install xLSTM
+# Reinstall the modified xLSTM
 pip install -e .
 ```
 
