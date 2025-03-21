@@ -159,13 +159,12 @@ def print_env_info():
         print("  " + "=" * 40)
     print()
 
-def load_model_and_tokenizer(model_name="NousResearch/Nous-Hermes-2-Mixtral-7B-DPO", use_4bit=True, device="cuda"):
+def load_model_and_tokenizer(model_name="NX-AI/xLSTM-7b", device="cuda"):
     """
     Load a model and tokenizer.
     
     Args:
         model_name: Name or path of the model to load
-        use_4bit: Whether to use 4-bit quantization
         device: Device to load the model on
     
     Returns:
@@ -184,22 +183,11 @@ def load_model_and_tokenizer(model_name="NousResearch/Nous-Hermes-2-Mixtral-7B-D
     print("Loading model...")
     start_time = time.time()
     
-    # Set up quantization config if requested
-    if use_4bit:
-        from transformers import BitsAndBytesConfig
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16
-        )
-    else:
-        quantization_config = None
-    
-    # Load the model
+    # Load the model with float16 precision
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.float16,
-        device_map=device,
-        quantization_config=quantization_config
+        device_map=device
     )
     
     # Print model loading time
@@ -252,75 +240,78 @@ def simple_generation(
     batch_size=1
 ):
     """
-    Generate text from a prompt.
+    Generate text from a model.
     
     Args:
-        model: The model to use for generation
-        tokenizer: The tokenizer to use for encoding and decoding
+        model: The model to generate from
+        tokenizer: The tokenizer to use
         prompt: The prompt to generate from
-        num_tokens: Number of tokens to generate
-        temperature: Sampling temperature
-        top_p: Nucleus sampling parameter
-        top_k: Top-k sampling parameter
-        batch_size: Batch size for generation
-    
+        num_tokens: The number of tokens to generate
+        temperature: The temperature to use for sampling
+        top_p: The top-p value to use for sampling
+        top_k: The top-k value to use for sampling
+        batch_size: The batch size to use
+        
     Returns:
         tuple: (output_text, tokens_generated, generation_time)
     """
-    start_time = time.time()
-    device = next(model.parameters()).device
+    # Print the prompt
+    print(f"Prompt: {prompt}")
     
     # Tokenize the prompt
-    encoding = tokenizer(
-        [prompt] * batch_size,
-        return_tensors="pt",
-        padding=True,
-        truncation=True
-    ).to(device)
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    prompt_length = input_ids.shape[-1]
     
-    prompt_length = encoding.input_ids.shape[1]
+    if input_ids.device != model.device:
+        input_ids = input_ids.to(model.device)
     
-    # Set up generation parameters
-    gen_config = {
-        "max_length": prompt_length + num_tokens,
-        "temperature": temperature,
-        "top_p": top_p,
-        "top_k": top_k,
-        "pad_token_id": tokenizer.pad_token_id,
-        "eos_token_id": tokenizer.eos_token_id,
-        "do_sample": temperature > 0.0001,
-        "num_return_sequences": 1
-    }
+    # Prepare for batch processing if needed
+    if batch_size > 1:
+        # Duplicate the input for batch processing
+        input_ids = input_ids.repeat(batch_size, 1)
     
     # Generate
-    try:
-        with torch.no_grad():
-            output = model.generate(**encoding, **gen_config)
-            
-        # Calculate timing
-        generation_time = time.time() - start_time
-        
-        # Count tokens generated (accounting for batch)
-        if batch_size > 1:
-            if hasattr(output, 'shape'):
-                tokens_generated = output.shape[1] - prompt_length
-            else:
-                try:
-                    tokens_generated = output[0].shape[1] - prompt_length
-                except (IndexError, AttributeError):
-                    print("Warning: Could not determine exact tokens generated, using requested tokens")
-                    tokens_generated = num_tokens
-        else:
+    start_time = time.time()
+    
+    with torch.no_grad():
+        output = model.generate(
+            input_ids=input_ids,
+            max_length=prompt_length + num_tokens,
+            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            pad_token_id=tokenizer.eos_token_id
+        )
+    
+    # Calculate time taken
+    generation_time = time.time() - start_time
+    
+    # Figure out how many tokens were actually generated
+    if batch_size > 1:
+        if hasattr(output, 'shape'):
             tokens_generated = output.shape[1] - prompt_length
-        
-        # Decode the output (only the first in the batch for display)
-        decoded_output = tokenizer.decode(output[0], skip_special_tokens=True)
-        
-        return decoded_output, tokens_generated, generation_time
-        
+        else:
+            try:
+                tokens_generated = output[0].shape[1] - prompt_length
+            except (IndexError, AttributeError):
+                print("Warning: Could not determine exact tokens generated, using requested tokens")
+                tokens_generated = num_tokens
+    else:
+        tokens_generated = output.shape[1] - prompt_length
+    
+    # Decode the output
+    try:
+        if batch_size > 1:
+            # Use only the first output for display
+            output_text = tokenizer.decode(output[0], skip_special_tokens=True)
+        else:
+            output_text = tokenizer.decode(output[0], skip_special_tokens=True)
     except Exception as e:
-        print(f"Generation error: {str(e)}")
-        return f"Error: {str(e)}", 0, time.time() - start_time
+        print(f"Error decoding output: {e}")
+        return prompt, 0, generation_time
+    
+    return output_text, tokens_generated, generation_time
 
 def benchmark_model(
     model,
@@ -335,106 +326,108 @@ def benchmark_model(
     show_output=True
 ):
     """
-    Benchmark generation speed.
+    Benchmark a model's generation speed.
     
     Args:
-        model: Model to benchmark
-        tokenizer: Tokenizer for the model
-        prompt: Text prompt for generation
-        num_tokens: Number of tokens to generate
-        runs: Number of benchmark runs
-        temperature: Sampling temperature
-        warmup_runs: Number of warmup runs
-        warmup_tokens: Number of tokens for warmup
-        batch_size: Batch size for generation
-        show_output: Whether to show generated output
-    
+        model: The model to benchmark
+        tokenizer: The tokenizer to use
+        prompt: The prompt to generate from
+        num_tokens: The number of tokens to generate
+        runs: The number of benchmark runs to perform
+        temperature: The temperature to use for generation
+        warmup_runs: The number of warmup runs to perform
+        warmup_tokens: The number of tokens to generate during warmup
+        batch_size: The batch size to use
+        show_output: Whether to show the generated text
+        
     Returns:
-        dict: Dictionary of benchmark results
+        dict: Benchmark results
     """
-    # Run warmup iterations
+    # Warm up the model
     if warmup_runs > 0:
-        print(f"Performing {'extensive ' if warmup_tokens > 20 else ''}warmup with {warmup_tokens} tokens...")
+        print(f"Performing extensive warmup with {warmup_tokens} tokens...")
         for i in range(warmup_runs):
             print(f"Warmup round {i+1}/{warmup_runs}...")
             _, _, _ = simple_generation(
                 model, 
                 tokenizer, 
-                prompt,
+                prompt, 
                 num_tokens=warmup_tokens,
                 temperature=temperature,
                 batch_size=batch_size
             )
     
-    # Print benchmark parameters
+    # Run the benchmark
     print(f"Running {runs} benchmark iterations...")
+    times = []
+    tokens_per_second = []
+    final_output = None
     
-    # Store results
-    timings = []
-    token_counts = []
-    output_text = ""
-    
-    # Run timed iterations
     for i in range(runs):
         print(f"Benchmark run {i+1}/{runs}...")
-        torch.cuda.synchronize()
-        
-        # Run generation
         output, tokens_generated, generation_time = simple_generation(
             model, 
             tokenizer, 
-            prompt,
+            prompt, 
             num_tokens=num_tokens,
             temperature=temperature,
             batch_size=batch_size
         )
         
-        # Print results for this run
-        tokens_per_second = tokens_generated / generation_time
-        print(f"  Run {i+1}: {tokens_per_second:.2f} tokens/sec ({generation_time:.2f}s)")
+        # Save the output for display
+        final_output = output
         
-        # Store results
-        timings.append(generation_time)
-        token_counts.append(tokens_generated)
-        output_text = output
+        # Calculate tokens per second
+        if generation_time > 0:
+            tps = tokens_generated / generation_time
+            tokens_per_second.append(tps)
+            times.append(generation_time)
+            print(f"  Run {i+1}: {tps:.2f} tokens/sec ({generation_time:.2f}s)")
+        else:
+            print(f"  Run {i+1}: instantaneous generation (too fast to measure)")
     
-    # Print the last generated text if requested
+    # Display the generated text from the final run
     if show_output:
-        print(f"\nGenerated text (from final run):\n{output_text}\n")
+        print(f"\nGenerated text (from final run):")
+        print(final_output)
     
     # Calculate statistics
-    avg_time = np.mean(timings)
-    avg_tokens = np.mean(token_counts)
-    tokens_per_second = avg_tokens / avg_time
-    std_tokens_per_second = np.std([tc/t for tc, t in zip(token_counts, timings)])
-    std_percent = (std_tokens_per_second / tokens_per_second) * 100
-    
-    # Print summary
-    print(f"Benchmark statistics ({runs} runs):")
-    print(f"Tokens generated per run: {avg_tokens:.0f}")
-    print(f"Average time: {avg_time:.2f} seconds")
-    print(f"Average tokens per second: {tokens_per_second:.2f}")
-    print(f"Standard deviation: {std_tokens_per_second:.2f} tokens/sec ({std_percent:.2f}%)")
-    print(f"Min: {min([tc/t for tc, t in zip(token_counts, timings)]):.2f} tokens/sec")
-    print(f"Max: {max([tc/t for tc, t in zip(token_counts, timings)]):.2f} tokens/sec")
-    
-    # Return results
-    return {
-        "tokens_per_second": tokens_per_second,
-        "std_tokens_per_second": std_tokens_per_second,
-        "std_percent": std_percent,
-        "timings": timings,
-        "token_counts": token_counts,
-        "output_text": output_text
-    }
+    if tokens_per_second:
+        avg_tps = sum(tokens_per_second) / len(tokens_per_second)
+        std_tps = np.std(tokens_per_second) if len(tokens_per_second) > 1 else 0
+        min_tps = min(tokens_per_second)
+        max_tps = max(tokens_per_second)
+        avg_time = sum(times) / len(times)
+        
+        print(f"\nBenchmark statistics ({runs} runs):")
+        print(f"Tokens generated per run: {num_tokens}")
+        print(f"Average time: {avg_time:.2f} seconds")
+        print(f"Average tokens per second: {avg_tps:.2f}")
+        print(f"Standard deviation: {std_tps:.2f} tokens/sec ({std_tps/avg_tps*100:.2f}%)")
+        print(f"Min: {min_tps:.2f} tokens/sec")
+        print(f"Max: {max_tps:.2f} tokens/sec")
+        
+        return {
+            "avg_tps": avg_tps,
+            "std_tps": std_tps,
+            "relative_std": std_tps / avg_tps,
+            "min_tps": min_tps,
+            "max_tps": max_tps,
+            "runs": runs,
+            "tokens": num_tokens,
+            "times": times,
+            "tokens_per_second": tokens_per_second
+        }
+    else:
+        print("No valid benchmark data collected")
+        return None
 
 def compare_kernels(
-    model_name="NousResearch/Nous-Hermes-2-Mixtral-7B-DPO",
+    model_name="NX-AI/xLSTM-7b",
     prompt="Hello, world!",
     num_tokens=100,
     runs=3,
     temperature=0.8,
-    use_4bit=True,
     warmup_runs=1,
     warmup_tokens=10,
     batch_size=1,
@@ -442,39 +435,37 @@ def compare_kernels(
     cooldown_time=3
 ):
     """
-    Compare stock and Triton kernels performance.
+    Compare the performance of different kernel implementations.
     
     Args:
-        model_name: Name or path of the model to load
-        prompt: Text prompt for generation
-        num_tokens: Number of tokens to generate
-        runs: Number of benchmark runs
-        temperature: Sampling temperature
-        use_4bit: Whether to use 4-bit quantization
-        warmup_runs: Number of warmup runs
-        warmup_tokens: Number of tokens for warmup
-        batch_size: Batch size for generation
-        show_output: Whether to show generated output
-        cooldown_time: Time to wait between tests to cool down GPU
-    
+        model_name: The model to use
+        prompt: The prompt to generate from
+        num_tokens: The number of tokens to generate
+        runs: The number of benchmark runs to perform
+        temperature: The temperature to use for generation
+        warmup_runs: The number of warmup runs to perform
+        warmup_tokens: The number of tokens to generate during warmup
+        batch_size: The batch size to use
+        show_output: Whether to show the generated text
+        cooldown_time: Time to wait between tests to cool down hardware
+        
     Returns:
-        tuple: (stock_results, triton_results)
+        dict: Comparison results
     """
-    # Run with stock kernels first
+    # Set up results dictionary
+    results = {}
+    
+    # First, run with stock kernels
     print_env_info()
     enable_optimizations(kernel_mode="stock")
     
-    # Load model
-    model, tokenizer = load_model_and_tokenizer(
-        model_name=model_name, 
-        use_4bit=use_4bit
-    )
+    # Load the model and tokenizer
+    model, tokenizer = load_model_and_tokenizer(model_name)
     
-    # Run benchmark
-    print(f"Prompt: {prompt}")
+    # Run the benchmark
     stock_results = benchmark_model(
-        model,
-        tokenizer,
+        model, 
+        tokenizer, 
         prompt=prompt,
         num_tokens=num_tokens,
         runs=runs,
@@ -485,30 +476,25 @@ def compare_kernels(
         show_output=show_output
     )
     
-    # Cool down between tests
+    # Save the results
+    results["stock"] = stock_results
+    
+    # Cool down
     if cooldown_time > 0:
         print(f"\nCooling down for {cooldown_time} seconds before next test...")
         time.sleep(cooldown_time)
     
-    # Delete model to free GPU memory
-    del model
-    torch.cuda.empty_cache()
-    
-    # Now run with triton kernels
+    # Then, run with triton kernels
     print_env_info()
     enable_optimizations(kernel_mode="triton")
     
-    # Load model again
-    model, tokenizer = load_model_and_tokenizer(
-        model_name=model_name,
-        use_4bit=use_4bit
-    )
+    # Load the model and tokenizer
+    model, tokenizer = load_model_and_tokenizer(model_name)
     
-    # Run benchmark
-    print(f"Prompt: {prompt}")
+    # Run the benchmark
     triton_results = benchmark_model(
-        model,
-        tokenizer,
+        model, 
+        tokenizer, 
         prompt=prompt,
         num_tokens=num_tokens,
         runs=runs,
@@ -519,186 +505,115 @@ def compare_kernels(
         show_output=show_output
     )
     
-    # Print comparison
-    print("\n" + "=" * 70)
-    print("PERFORMANCE COMPARISON: STOCK vs TRITON KERNELS")
-    print("=" * 70)
+    # Save the results
+    results["triton"] = triton_results
     
-    stock_tps = stock_results["tokens_per_second"]
-    triton_tps = triton_results["tokens_per_second"]
-    speedup = ((triton_tps / stock_tps) - 1) * 100
+    # Calculate the speedup
+    if stock_results and triton_results:
+        stock_tps = stock_results["avg_tps"]
+        triton_tps = triton_results["avg_tps"]
+        
+        speedup = (triton_tps - stock_tps) / stock_tps * 100
+        
+        print("\n" + "=" * 70)
+        print("PERFORMANCE COMPARISON: STOCK vs TRITON KERNELS")
+        print("=" * 70)
+        print(f"Stock kernels:  {stock_tps:.2f} tokens/sec (±{stock_results['relative_std']*100:.2f}%)")
+        print(f"Triton kernels: {triton_tps:.2f} tokens/sec (±{triton_results['relative_std']*100:.2f}%)")
+        print(f"Speedup: {speedup:.2f}%")
+        
+        # Print statistical significance warning if needed
+        combined_std = stock_results["std_tps"] + triton_results["std_tps"]
+        difference = abs(triton_tps - stock_tps)
+        
+        if difference < combined_std:
+            print("\n⚠️ NOTE: The performance difference may not be statistically significant")
+            print(f"The difference ({difference:.2f}) is less than the combined standard deviation ({combined_std:.2f})")
+        
+        # Print warning if triton is slower
+        if speedup < 0:
+            print("\n⚠️ WARNING: The triton kernels are slower than stock kernels!")
+            print("This might be due to:")
+            print("1. Optimizations not properly applied")
+            print("2. Hardware not supported by optimizations")
+            print("3. Model configuration issues")
+            print("\nCheck the 'Exploring model structure' output above for clues.")
+        
+        # Print run-by-run comparison
+        print("\nRun-by-run comparison:")
+        print("Run  | Stock (tokens/s) | Triton (tokens/s) | Diff (%)")
+        print("-------------------------------------------------------")
+        for i in range(min(len(stock_results["tokens_per_second"]), len(triton_results["tokens_per_second"]))):
+            stock_run_tps = stock_results["tokens_per_second"][i]
+            triton_run_tps = triton_results["tokens_per_second"][i]
+            run_diff = (triton_run_tps - stock_run_tps) / stock_run_tps * 100
+            print(f"{i+1:4d} | {stock_run_tps:16.2f} | {triton_run_tps:16.2f} | {run_diff:+8.2f}%")
+        
+        # Save comparison results
+        results["speedup"] = speedup
+        results["difference"] = difference
+        results["combined_std"] = combined_std
+        results["statistically_significant"] = difference >= combined_std
     
-    stock_std = stock_results["std_tokens_per_second"]
-    triton_std = triton_results["std_tokens_per_second"]
-    combined_std = stock_std + triton_std
-    
-    print(f"Stock kernels:  {stock_tps:.2f} tokens/sec (±{stock_results['std_percent']:.2f}%)")
-    print(f"Triton kernels: {triton_tps:.2f} tokens/sec (±{triton_results['std_percent']:.2f}%)")
-    print(f"Speedup: {speedup:.2f}%")
-    
-    # Determine if result is statistically significant
-    difference = abs(stock_tps - triton_tps)
-    if difference < combined_std:
-        print("\n⚠️ NOTE: The performance difference may not be statistically significant")
-        print(f"The difference ({difference:.2f}) is less than the combined standard deviation ({combined_std:.2f})")
-    
-    # Print a warning if triton is slower
-    if triton_tps < stock_tps:
-        print("\n⚠️ WARNING: The triton kernels are slower than stock kernels!")
-        print("This might be due to:")
-        print("1. Optimizations not properly applied")
-        print("2. Hardware not supported by optimizations")
-        print("3. Model configuration issues")
-        print("\nCheck the 'Exploring model structure' output above for clues.")
-    
-    # Print run-by-run comparison
-    print("\nRun-by-run comparison:")
-    print("Run  | Stock (tokens/s) | Triton (tokens/s) | Diff (%)")
-    print("-------------------------------------------------------")
-    for i in range(runs):
-        stock_run_tps = stock_results["token_counts"][i] / stock_results["timings"][i]
-        triton_run_tps = triton_results["token_counts"][i] / triton_results["timings"][i]
-        run_speedup = ((triton_run_tps / stock_run_tps) - 1) * 100
-        print(f"{i+1:4d} | {stock_run_tps:14.2f} | {triton_run_tps:16.2f} | {run_speedup:+8.2f}%")
-    
-    return stock_results, triton_results
+    return results
 
 def main():
-    """Main function to handle command line arguments."""
-    parser = argparse.ArgumentParser(description="xLSTM Benchmark Tool")
-    
-    # Add arguments
-    parser.add_argument(
-        "--mode", 
-        type=str, 
-        choices=["benchmark", "generate", "compare"], 
-        default="benchmark",
-        help="Run mode: benchmark, generate, or compare kernels"
-    )
-    parser.add_argument(
-        "--kernel", 
-        type=str, 
-        choices=["stock", "triton", "auto"], 
-        default="auto",
-        help="Kernel type to use"
-    )
-    parser.add_argument(
-        "--prompt", 
-        type=str, 
-        default="Hello, world!",
-        help="Prompt for generation"
-    )
-    parser.add_argument(
-        "--tokens", 
-        type=int, 
-        default=100,
-        help="Number of tokens to generate"
-    )
-    parser.add_argument(
-        "--runs", 
-        type=int, 
-        default=3,
-        help="Number of benchmark runs"
-    )
-    parser.add_argument(
-        "--temp", 
-        type=float, 
-        default=0.8,
-        help="Temperature for sampling"
-    )
-    parser.add_argument(
-        "--model", 
-        type=str, 
-        default="NousResearch/Nous-Hermes-2-Mixtral-7B-DPO",
-        help="Model name or path"
-    )
-    parser.add_argument(
-        "--use-4bit", 
-        action="store_true",
-        help="Use 4-bit quantization"
-    )
-    parser.add_argument(
-        "--warmup-runs", 
-        type=int, 
-        default=1,
-        help="Number of warmup runs"
-    )
-    parser.add_argument(
-        "--warmup-tokens", 
-        type=int, 
-        default=10,
-        help="Number of tokens for warmup"
-    )
-    parser.add_argument(
-        "--batch-size", 
-        type=int, 
-        default=1,
-        help="Batch size for generation"
-    )
-    parser.add_argument(
-        "--no-output", 
-        action="store_true",
-        help="Don't show generated output"
-    )
-    parser.add_argument(
-        "--cooldown", 
-        type=int, 
-        default=3,
-        help="Cooldown time in seconds between tests"
-    )
-    parser.add_argument(
-        "--force-triton", 
-        action="store_true",
-        help="Force using triton kernels"
+    # Set up the argument parser
+    parser = argparse.ArgumentParser(
+        description='xLSTM benchmarking and generation tool',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent('''
+            Examples:
+              # Generate text
+              python xlstm7b.py --mode generate --prompt "Once upon a time" --tokens 200
+              
+              # Run a benchmark
+              python xlstm7b.py --mode benchmark --tokens 100 --runs 5
+              
+              # Compare kernel implementations
+              python xlstm7b.py --mode compare --tokens 100 --runs 3
+        ''')
     )
     
-    # Parse arguments
+    # Add common arguments
+    parser.add_argument('--model', type=str, default="NX-AI/xLSTM-7b", help='Model name or path')
+    parser.add_argument('--tokens', type=int, default=100, help='Number of tokens to generate')
+    parser.add_argument('--prompt', type=str, default="Hello, world!", help='Prompt for text generation')
+    parser.add_argument('--temp', type=float, default=0.8, help='Temperature for sampling')
+    parser.add_argument('--batch-size', type=int, default=1, help='Batch size for generation')
+    parser.add_argument('--device', type=str, default="cuda", help='Device to use (cuda or cpu)')
+    
+    # Add mode-specific arguments
+    parser.add_argument('--mode', type=str, choices=['benchmark', 'generate', 'compare'], default='benchmark', 
+                        help='Mode to run (benchmark, generate, or compare)')
+    parser.add_argument('--kernel', type=str, choices=['stock', 'triton', 'auto'], default='auto',
+                        help='Kernel implementation to use (stock, triton, or auto)')
+    parser.add_argument('--runs', type=int, default=3, help='Number of benchmark runs')
+    parser.add_argument('--warmup-runs', type=int, default=1, help='Number of warmup runs')
+    parser.add_argument('--warmup-tokens', type=int, default=10, help='Number of tokens for warmup')
+    parser.add_argument('--cooldown', type=int, default=3, help='Cooldown time between tests (seconds)')
+    parser.add_argument('--force-triton', action='store_true', help='Force Triton detection override')
+    parser.add_argument('--show-output', type=bool, default=True, help='Show generated text output')
+    
+    # Parse the arguments
     args = parser.parse_args()
     
-    # Apply manual overrides if specified
+    # Force environment variable overrides if specified
     if args.force_triton:
         is_triton_override(True)
     
-    # Run in the specified mode
-    if args.mode == "benchmark":
-        # Print environment information
+    # Handle different modes
+    if args.mode == "generate":
+        # Print environment info
         print_env_info()
+        
+        # Enable optimizations
         enable_optimizations(kernel_mode=args.kernel)
         
-        # Load model
-        model, tokenizer = load_model_and_tokenizer(
-            model_name=args.model, 
-            use_4bit=args.use_4bit
-        )
+        # Load the model
+        model, tokenizer = load_model_and_tokenizer(args.model, device=args.device)
         
-        # Run benchmark
-        print(f"Prompt: {args.prompt}")
-        benchmark_model(
-            model,
-            tokenizer,
-            prompt=args.prompt,
-            num_tokens=args.tokens,
-            runs=args.runs,
-            temperature=args.temp,
-            warmup_runs=args.warmup_runs,
-            warmup_tokens=args.warmup_tokens,
-            batch_size=args.batch_size,
-            show_output=not args.no_output
-        )
-    
-    elif args.mode == "generate":
-        # Print environment information
-        print_env_info()
-        enable_optimizations(kernel_mode=args.kernel)
-        
-        # Load model
-        model, tokenizer = load_model_and_tokenizer(
-            model_name=args.model, 
-            use_4bit=args.use_4bit
-        )
-        
-        # Generate
-        print(f"Prompt: {args.prompt}")
+        # Generate text
         output, tokens_generated, generation_time = simple_generation(
             model, 
             tokenizer, 
@@ -709,25 +624,47 @@ def main():
         )
         
         # Print results
-        tokens_per_second = tokens_generated / generation_time
-        print(f"\nGeneration time: {generation_time:.2f} seconds")
-        print(f"Tokens generated: {tokens_generated}")
-        print(f"Tokens per second: {tokens_per_second:.2f}")
-        print(f"\nGenerated text:\n{output}")
-    
+        print(f"\nGenerated {tokens_generated} tokens in {generation_time:.2f} seconds")
+        print(f"Tokens per second: {tokens_generated/generation_time:.2f}")
+        print("\nGenerated text:")
+        print(output)
+        
+    elif args.mode == "benchmark":
+        # Print environment info
+        print_env_info()
+        
+        # Enable optimizations
+        enable_optimizations(kernel_mode=args.kernel)
+        
+        # Load the model
+        model, tokenizer = load_model_and_tokenizer(args.model, device=args.device)
+        
+        # Run the benchmark
+        benchmark_model(
+            model, 
+            tokenizer, 
+            prompt=args.prompt,
+            num_tokens=args.tokens,
+            runs=args.runs,
+            temperature=args.temp,
+            warmup_runs=args.warmup_runs,
+            warmup_tokens=args.warmup_tokens,
+            batch_size=args.batch_size,
+            show_output=args.show_output
+        )
+        
     elif args.mode == "compare":
-        # Compare kernels
+        # Run the comparison
         compare_kernels(
             model_name=args.model,
             prompt=args.prompt,
             num_tokens=args.tokens,
             runs=args.runs,
             temperature=args.temp,
-            use_4bit=args.use_4bit,
             warmup_runs=args.warmup_runs,
             warmup_tokens=args.warmup_tokens,
             batch_size=args.batch_size,
-            show_output=not args.no_output,
+            show_output=args.show_output,
             cooldown_time=args.cooldown
         )
 
