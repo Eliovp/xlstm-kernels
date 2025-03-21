@@ -20,10 +20,42 @@ def verify_environment():
         print(f"Transformers path: {transformers.__file__}")
         
         # Check if it's our fork
-        if hasattr(transformers, 'integrations') and hasattr(transformers.integrations, 'xlstm'):
+        is_nx_fork = False
+        
+        # Method 1: Check for NX-AI in path or version
+        if "NX-AI" in transformers.__file__ or "xlstm" in transformers.__version__:
+            is_nx_fork = True
+        
+        # Method 2: Check if the fork has xLSTM-specific classes
+        if hasattr(transformers, 'models') and 'xlstm' in dir(transformers.models):
+            is_nx_fork = True
+            
+        # Method 3: Check if the models module has xlstm
+        models_dir = dir(transformers.models) if hasattr(transformers, 'models') else []
+        if 'xlstm' in models_dir or 'xlstmlarge' in models_dir or 'xLSTM' in models_dir:
+            is_nx_fork = True
+            
+        # Method 4: Check if specific integrations exist
+        if hasattr(transformers, 'integrations'):
+            integrations_dir = dir(transformers.integrations)
+            if 'xlstm' in integrations_dir or 'xLSTM' in integrations_dir:
+                is_nx_fork = True
+                
+        # Method 5: Try importing specific xlstm components
+        try:
+            from transformers import XLSTMConfig
+            is_nx_fork = True
+        except ImportError:
+            pass
+            
+        if is_nx_fork:
             print("✅ Using NX-AI transformers fork with xLSTM integration")
         else:
             print("❌ Not using the NX-AI transformers fork")
+            print("   Checking available model architectures:")
+            # List available model architectures to debug
+            if hasattr(transformers, 'models'):
+                print(f"   Models: {sorted(dir(transformers.models))[:10]}...")
     except ImportError:
         print("❌ Transformers not installed")
     
@@ -39,7 +71,16 @@ def verify_environment():
         print(f"HIP_VISIBLE_DEVICES: {os.environ['HIP_VISIBLE_DEVICES']}")
     
     # Check AMD detection
-    print(f"AMD GPU detected: {is_amd_hardware()}")
+    is_amd = is_amd_hardware()
+    print(f"AMD GPU detected: {is_amd}")
+    
+    # Print environment variables related to AMD optimizations
+    print("AMD optimization environment variables:")
+    for var in ["XLSTM_FORCE_STOCK_KERNELS", "DISABLE_AMD_OPTIMIZATIONS", 
+                "FORCE_AMD_DETECTION", "AMD_CDNA3_OPTIMIZATIONS", 
+                "AMD_PREFER_HYBRID_KERNELS", "XLSTM_OPTIMIZE_BATCH"]:
+        if var in os.environ:
+            print(f"  {var}={os.environ[var]}")
     
     print("="*40)
 
@@ -122,30 +163,48 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
     if prompt is None:
         prompt = "In a world where technology and nature coexist,"
     
+    # Clean up any previous environment variable settings
+    for var in ["XLSTM_FORCE_STOCK_KERNELS", "DISABLE_AMD_OPTIMIZATIONS", 
+               "FORCE_AMD_DETECTION", "AMD_CDNA3_OPTIMIZATIONS", 
+               "AMD_PREFER_HYBRID_KERNELS", "XLSTM_OPTIMIZE_BATCH"]:
+        if var in os.environ:
+            del os.environ[var]
+    
     # Set kernel mode environment variables if needed
     if kernel_mode == "stock":
         print("\n===== Testing with stock (original) kernels =====")
-        # Override AMD detection to force stock kernels
-        is_amd_override(False)
+        # Force native implementation regardless of hardware
+        os.environ["FORCE_AMD_DETECTION"] = "0"
         os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "1"
-        # Disable any AMD optimizations
         os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "1"
+        # Override AMD detection for this run
+        is_amd_override(False)
     elif kernel_mode == "hybrid":
         print("\n===== Testing with AMD hybrid-optimized kernels =====")
-        # Enable AMD detection
-        is_amd_override(True)
+        # Force AMD optimizations to be used
+        os.environ["FORCE_AMD_DETECTION"] = "1"
         os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "0"
         os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "0"
+        # Additional optimizations
+        os.environ["AMD_CDNA3_OPTIMIZATIONS"] = "1"
+        os.environ["AMD_PREFER_HYBRID_KERNELS"] = "1"
+        os.environ["XLSTM_OPTIMIZE_BATCH"] = "1"
+        # Override AMD detection for this run
+        is_amd_override(True)
         # Explicitly enable AMD optimizations
         enable_amd_optimizations()
     else:  # auto
         print("\n===== Testing with automatic kernel detection =====")
         # Use hardware detection (default)
         is_amd_override(None)
-        if "XLSTM_FORCE_STOCK_KERNELS" in os.environ:
-            del os.environ["XLSTM_FORCE_STOCK_KERNELS"]
-        if "DISABLE_AMD_OPTIMIZATIONS" in os.environ:
-            del os.environ["DISABLE_AMD_OPTIMIZATIONS"]
+    
+    # Verify environment after setting variables
+    print("Environment variables set for this run:")
+    for var in ["XLSTM_FORCE_STOCK_KERNELS", "DISABLE_AMD_OPTIMIZATIONS", 
+               "FORCE_AMD_DETECTION", "AMD_CDNA3_OPTIMIZATIONS", 
+               "AMD_PREFER_HYBRID_KERNELS", "XLSTM_OPTIMIZE_BATCH"]:
+        if var in os.environ:
+            print(f"  {var}={os.environ[var]}")
     
     # Load tokenizer
     print("Loading tokenizer...")
@@ -173,9 +232,21 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
     # Get kernel types being used
     try:
         # Try direct access first
-        if hasattr(model, 'model') and hasattr(model.model, 'model'):
-            config = model.model.model.backbone.blocks[0].mlstm_layer.mlstm_backend.config
-            kernel_info = f"Using kernel: {config.chunkwise_kernel}"
+        if hasattr(model, 'model') and hasattr(model.model, 'model') and hasattr(model.model.model, 'backbone'):
+            backbone = model.model.model.backbone
+            if hasattr(backbone, 'blocks') and len(backbone.blocks) > 0:
+                block = backbone.blocks[0]
+                if hasattr(block, 'mlstm_layer') and hasattr(block.mlstm_layer, 'mlstm_backend'):
+                    backend = block.mlstm_layer.mlstm_backend
+                    if hasattr(backend, 'config'):
+                        config = backend.config
+                        kernel_info = f"Using kernel: {config.chunkwise_kernel}"
+                    else:
+                        kernel_info = "Backend exists but no config found"
+                else:
+                    kernel_info = "Block exists but no mlstm_layer or backend found"
+            else:
+                kernel_info = "Backbone exists but no blocks found"
         else:
             # Try to explore the model structure
             print("Exploring model structure for kernel info:")
@@ -207,13 +278,29 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
                                             config = block.mlstm_layer.mlstm_backend.config
                                             kernel_info = f"Using kernel: {config.chunkwise_kernel}"
                                             found = True
+                                        else:
+                                            kernel_info = "Backend exists but no config found"
+                                    else:
+                                        kernel_info = "mlstm_layer exists but no backend found"
+                                else:
+                                    kernel_info = "Block exists but no mlstm_layer found"
+                            else:
+                                kernel_info = "Backbone has no blocks"
+                        else:
+                            kernel_info = "Backbone exists but no blocks attribute"
+                    else:
+                        kernel_info = "model.model.model exists but no backbone"
+                else:
+                    kernel_info = "model.model exists but no model.model.model"
+            else:
+                kernel_info = "No model.model attribute found"
             
             if not found:
-                kernel_info = "Could not determine kernel configuration"
+                kernel_info = f"Could not determine kernel configuration: {kernel_info}"
     except (AttributeError, IndexError) as e:
         kernel_info = f"Could not determine kernel configuration: {str(e)}"
     
-    print(kernel_info)
+    print(f"Kernel info: {kernel_info}")
     print(f"Prompt: {prompt}")
     
     # Tokenize
@@ -317,8 +404,14 @@ if __name__ == "__main__":
     parser.add_argument('--tokens', type=int, default=100, help='Number of tokens to generate')
     parser.add_argument('--temp', type=float, default=0.7, help='Temperature for generation')
     parser.add_argument('--prompt', type=str, default=None, help='Text prompt')
+    parser.add_argument('--force-amd', action='store_true', help='Force AMD detection for all runs')
     
     args = parser.parse_args()
+    
+    # Set global environment variable for AMD detection if requested
+    if args.force_amd:
+        os.environ["FORCE_AMD_DETECTION"] = "1"
+        print("Forcing AMD detection for all runs")
     
     if args.mode == 'compare':
         compare_kernels(args.tokens, args.temp, args.prompt)

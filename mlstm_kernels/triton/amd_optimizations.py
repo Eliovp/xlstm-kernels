@@ -69,15 +69,37 @@ def are_amd_optimizations_enabled() -> bool:
 
 def is_amd() -> bool:
     """Check if the current hardware is AMD with HIP backend."""
+    # Cache result to prevent inconsistencies between calls
+    global _is_amd_detected
+    if '_is_amd_detected' in globals() and _is_amd_detected is not None:
+        return _is_amd_detected
+    
     # Check if we're forcing a specific mode for testing
-    if os.environ.get("FORCE_AMD_DETECTION", "0") == "1":
+    force_setting = os.environ.get("FORCE_AMD_DETECTION", None)
+    if force_setting == "1":
+        _is_amd_detected = True
         return True
-    if os.environ.get("FORCE_AMD_DETECTION", "0") == "0":
+    if force_setting == "0":
+        _is_amd_detected = False
         return False
         
+    # Check device properties
     if torch.cuda.is_available():
         device_name = torch.cuda.get_device_name(0).lower()
-        return "amd" in device_name or "mi" in device_name or "instinct" in device_name
+        # Debug output
+        print(f"Detecting GPU: {device_name}")
+        if any(keyword in device_name for keyword in ["amd", "mi", "instinct", "radeon", "gfx", "cdna"]):
+            print("Detected AMD GPU")
+            _is_amd_detected = True
+            return True
+    
+    # Also check if HIP is being used
+    if "HIP_VISIBLE_DEVICES" in os.environ:
+        print(f"HIP_VISIBLE_DEVICES present: {os.environ['HIP_VISIBLE_DEVICES']}")
+        _is_amd_detected = True
+        return True
+        
+    _is_amd_detected = False
     return False
 
 def is_cdna3() -> bool:
