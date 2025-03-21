@@ -290,6 +290,189 @@ def verify_environment():
     
     print("=" * 40)
 
+def load_model_and_tokenizer(model_name, device_map=None):
+    """
+    Load the model and tokenizer with proper error handling.
+    
+    Args:
+        model_name: HuggingFace model name/path
+        device_map: Device mapping strategy (auto, balanced, single device, etc.)
+        
+    Returns:
+        Tuple of (model, tokenizer, device)
+    """
+    print("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    
+    # Ensure the tokenizer has a padding token for batch processing
+    if tokenizer.pad_token is None:
+        print("Setting pad_token to eos_token for batch processing")
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    print("Loading model...")
+    start_load = time.time()
+    
+    # For batch processing, we need to avoid model sharding
+    # If batch_size > 1, force the model onto a single device
+    if device_map is None:
+        # Default for batched operation is to use a single device
+        device_map = "auto"
+    
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map=device_map
+        )
+        load_time = time.time() - start_load
+        
+        # Get the device of the first parameter
+        device = next(model.parameters()).device
+        print(f"Model loaded on {device} in {load_time:.2f} seconds")
+        
+        # Check if model is split across devices
+        devices = {param.device for param in model.parameters()}
+        if len(devices) > 1:
+            print(f"Note: Model is distributed across {len(devices)} devices: {devices}")
+        
+        return model, tokenizer, device, load_time
+    except Exception as e:
+        print(f"Error loading model: {str(e)}")
+        raise
+
+def simple_generation(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=None, batch_size=1):
+    """
+    Simple text generation without benchmarking.
+    
+    Args:
+        kernel_mode: 'stock', 'hybrid', or 'auto' (uses hardware detection)
+        num_tokens: Number of tokens to generate
+        temperature: Temperature for generation
+        prompt: Text prompt to use
+        batch_size: Batch size for generation
+    
+    Returns:
+        Generated text
+    """
+    # First verify the environment
+    verify_environment()
+    
+    # Use proper HuggingFace model ID
+    model_name = "NX-AI/xLSTM-7b"
+    
+    # Set default prompt if none provided
+    if prompt is None:
+        prompt = "In a world where technology and nature coexist,"
+    
+    # Clean up any previous environment variable settings
+    for var in ["XLSTM_FORCE_STOCK_KERNELS", "DISABLE_AMD_OPTIMIZATIONS", 
+               "FORCE_AMD_DETECTION", "AMD_CDNA3_OPTIMIZATIONS", 
+               "AMD_PREFER_HYBRID_KERNELS", "XLSTM_OPTIMIZE_BATCH"]:
+        if var in os.environ:
+            del os.environ[var]
+    
+    # Enable optimizations based on kernel mode
+    optimizations_enabled = enable_optimizations(kernel_mode)
+    
+    # Verify environment after setting variables
+    print("Environment variables set for this run:")
+    for var in ["XLSTM_FORCE_STOCK_KERNELS", "DISABLE_AMD_OPTIMIZATIONS", 
+               "FORCE_AMD_DETECTION", "AMD_CDNA3_OPTIMIZATIONS", 
+               "AMD_PREFER_HYBRID_KERNELS", "XLSTM_OPTIMIZE_BATCH"]:
+        if var in os.environ:
+            print(f"  {var}={os.environ[var]}")
+    
+    # For batch processing, we need to avoid model sharding
+    # If using batches, force the model onto a single device
+    device_map = "cuda:0" if batch_size > 1 and torch.cuda.is_available() else "auto"
+    if batch_size > 1:
+        print(f"Using batch processing with size {batch_size}, forcing model to single device")
+    
+    # Load model and tokenizer
+    try:
+        model, tokenizer, device, load_time = load_model_and_tokenizer(model_name, device_map)
+    except Exception as e:
+        print(f"Failed to load model: {str(e)}")
+        return None
+    
+    # Attempt to manually set kernels based on mode
+    kernel_set = manually_set_kernels(model, kernel_mode)
+    if kernel_set:
+        print(f"Successfully set {kernel_mode} kernels manually")
+    
+    print(f"Prompt: {prompt}")
+    
+    # Handle batched inputs if needed
+    if batch_size > 1:
+        print(f"Using batch size: {batch_size}")
+        # Repeat the prompt for batched generation
+        prompts = [prompt] * batch_size
+        # Tokenize with padding
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True)
+        
+        # Ensure inputs are on the same device as the model
+        input_ids = inputs.input_ids.to(device)
+        attention_mask = inputs.attention_mask.to(device)
+    else:
+        # Single prompt processing
+        input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+        attention_mask = None
+    
+    # Generate
+    print(f"Generating {num_tokens} tokens with temperature {temperature}...")
+    start_time = time.time()
+    
+    try:
+        output = model.generate(
+            input_ids, 
+            attention_mask=attention_mask,
+            max_new_tokens=num_tokens,
+            do_sample=True,
+            temperature=temperature
+        )
+        
+        end_time = time.time()
+        time_taken = end_time - start_time
+        
+        # Get the generated text
+        if batch_size > 1:
+            try:
+                generated_texts = [tokenizer.decode(out, skip_special_tokens=True) for out in output]
+            except Exception as e:
+                print(f"Error decoding output: {str(e)}")
+                # Try alternative decoding if output format is unexpected
+                if hasattr(output, "shape") and len(output.shape) == 2:
+                    generated_texts = [tokenizer.decode(output[0], skip_special_tokens=True)]
+                else:
+                    generated_texts = ["Error: Could not decode output"]
+        else:
+            generated_texts = [tokenizer.decode(output[0], skip_special_tokens=True)]
+        
+        # Print results
+        print(f"\nGeneration completed in {time_taken:.2f} seconds")
+        print(f"Average speed: {num_tokens / time_taken:.2f} tokens/sec")
+        
+        print("\nGenerated text:")
+        for i, text in enumerate(generated_texts):
+            if batch_size > 1:
+                print(f"\n--- Sample {i+1}/{batch_size} ---")
+            print(text)
+        
+        return generated_texts
+        
+    except Exception as e:
+        print(f"An error occurred during generation: {str(e)}")
+        print(f"Model device: {device}")
+        if batch_size > 1:
+            print(f"Input device: {input_ids.device}")
+            print(f"Attention mask device: {attention_mask.device}")
+        else:
+            print(f"Input device: {input_ids.device}")
+            
+        # Suggest a solution
+        print("\nSuggested fix: Try running with batch_size=1 or specify a single GPU with HIP_VISIBLE_DEVICES")
+        return None
+
 def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=None, num_runs=3, warmup_tokens=30, batch_size=1):
     """
     Run a benchmark with the specified kernel mode.
@@ -337,28 +520,21 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
         if var in os.environ:
             print(f"  {var}={os.environ[var]}")
     
-    # Load tokenizer
-    print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # For batch processing, we need to avoid model sharding
+    # If using batches, force the model onto a single device
+    device_map = "cuda:0" if batch_size > 1 and torch.cuda.is_available() else "auto"
+    if batch_size > 1:
+        print(f"Using batch processing with size {batch_size}, forcing model to single device")
     
-    # Ensure the tokenizer has a padding token for batch processing
-    if tokenizer.pad_token is None:
-        print("Setting pad_token to eos_token for batch processing")
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    # Load model
-    print("Loading model...")
-    start_load = time.time()
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16,
-        device_map="auto"
-    )
-    load_time = time.time() - start_load
-    
-    # Print model info
-    device = next(model.parameters()).device
-    print(f"Model loaded on {device} in {load_time:.2f} seconds")
+    # Load model and tokenizer
+    try:
+        model, tokenizer, device, load_time = load_model_and_tokenizer(model_name, device_map)
+    except Exception as e:
+        print(f"Failed to load model: {str(e)}")
+        return {
+            "kernel_mode": kernel_mode,
+            "error": str(e)
+        }
     
     # Attempt to manually set kernels based on mode
     kernel_set = manually_set_kernels(model, kernel_mode)
@@ -423,156 +599,173 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
         prompts = [prompt] * batch_size
         # Tokenize with padding
         inputs = tokenizer(prompts, return_tensors="pt", padding=True)
-        input_ids = inputs.input_ids.to(model.device)
-        attention_mask = inputs.attention_mask.to(model.device)
+        input_ids = inputs.input_ids.to(device)
+        attention_mask = inputs.attention_mask.to(device)
         prompt_length = input_ids.shape[1]
     else:
         # Single prompt processing
-        input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
+        input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
         attention_mask = None
         prompt_length = input_ids.shape[1]
     
-    # Extensive warmup phase
-    print(f"Performing extensive warmup with {warmup_tokens} tokens...")
-    with torch.no_grad():
-        # Multiple warmup rounds
-        for i in range(3):
-            print(f"Warmup round {i+1}/3...")
-            _ = model.generate(
+    try:
+        # Extensive warmup phase
+        print(f"Performing extensive warmup with {warmup_tokens} tokens...")
+        with torch.no_grad():
+            # Multiple warmup rounds
+            for i in range(3):
+                print(f"Warmup round {i+1}/3...")
+                _ = model.generate(
+                    input_ids, 
+                    attention_mask=attention_mask,
+                    max_new_tokens=warmup_tokens, 
+                    do_sample=True, 
+                    temperature=temperature
+                )
+                torch.cuda.synchronize()
+                # Brief pause to allow GPU to stabilize
+                time.sleep(0.5)
+        
+        # Multi-run performance measurement
+        print(f"Running {num_runs} benchmark iterations...")
+        all_times = []
+        all_tokens_per_second = []
+        outputs = []
+        
+        for run in range(num_runs):
+            print(f"Benchmark run {run+1}/{num_runs}...")
+            torch.cuda.synchronize()  # Ensure previous operations are complete
+            
+            # Actual generation with timing
+            start_time = time.time()
+            output = model.generate(
                 input_ids, 
                 attention_mask=attention_mask,
-                max_new_tokens=warmup_tokens, 
-                do_sample=True, 
+                max_new_tokens=num_tokens,
+                do_sample=True,
                 temperature=temperature
             )
-            torch.cuda.synchronize()
-            # Brief pause to allow GPU to stabilize
-            time.sleep(0.5)
-    
-    # Multi-run performance measurement
-    print(f"Running {num_runs} benchmark iterations...")
-    all_times = []
-    all_tokens_per_second = []
-    outputs = []
-    
-    for run in range(num_runs):
-        print(f"Benchmark run {run+1}/{num_runs}...")
-        torch.cuda.synchronize()  # Ensure previous operations are complete
-        
-        # Actual generation with timing
-        start_time = time.time()
-        output = model.generate(
-            input_ids, 
-            attention_mask=attention_mask,
-            max_new_tokens=num_tokens,
-            do_sample=True,
-            temperature=temperature
-        )
-        torch.cuda.synchronize()  # Ensure generation is complete
-        outputs.append(output)
-        
-        end_time = time.time()
-        time_taken = end_time - start_time
-        
-        # Calculate per-batch tokens generated
-        if batch_size > 1:
-            # For batched output, we need to be careful with the shape handling
-            if hasattr(output, 'shape'):
-                # If output is a single tensor with batch dimension
-                tokens_generated = output.shape[1] - prompt_length
-            else:
-                # Try to get length of first sequence in batch if output is a list/tuple
-                try:
-                    tokens_generated = output[0].shape[1] - prompt_length
-                except (IndexError, AttributeError):
-                    # If all else fails, just use the requested tokens
-                    print("Warning: Could not determine exact tokens generated, using requested tokens")
-                    tokens_generated = num_tokens
-        else:
-            tokens_generated = output.shape[1] - prompt_length
+            torch.cuda.synchronize()  # Ensure generation is complete
+            outputs.append(output)
             
-        tokens_per_second = tokens_generated / time_taken
-        
-        all_times.append(time_taken)
-        all_tokens_per_second.append(tokens_per_second)
-        
-        print(f"  Run {run+1}: {tokens_per_second:.2f} tokens/sec ({time_taken:.2f}s)")
-        
-        # Small pause between runs to reduce thermal effects
-        if run < num_runs - 1:
-            time.sleep(1.0)
-    
-    # Calculate statistics
-    avg_time = sum(all_times) / len(all_times)
-    avg_tokens_per_second = sum(all_tokens_per_second) / len(all_tokens_per_second)
-    
-    # Calculate variance/std dev if we have multiple runs
-    if len(all_tokens_per_second) > 1:
-        variance = sum((x - avg_tokens_per_second) ** 2 for x in all_tokens_per_second) / len(all_tokens_per_second)
-        std_dev = variance ** 0.5
-        std_dev_percent = (std_dev / avg_tokens_per_second) * 100
-    else:
-        std_dev = 0
-        std_dev_percent = 0
-    
-    # Get the generated text from the last run
-    if batch_size > 1:
-        try:
-            if hasattr(outputs[-1], 'shape'):
-                # Single tensor with batch dimension
-                generated_texts = [tokenizer.decode(outputs[-1][i], skip_special_tokens=True) 
-                                  for i in range(min(batch_size, outputs[-1].shape[0]))]
-            elif isinstance(outputs[-1], (list, tuple)):
-                # List of tensors
-                generated_texts = [tokenizer.decode(out, skip_special_tokens=True) 
-                                  for out in outputs[-1][:batch_size]]
+            end_time = time.time()
+            time_taken = end_time - start_time
+            
+            # Calculate per-batch tokens generated
+            if batch_size > 1:
+                # For batched output, we need to be careful with the shape handling
+                if hasattr(output, 'shape'):
+                    # If output is a single tensor with batch dimension
+                    tokens_generated = output.shape[1] - prompt_length
+                else:
+                    # Try to get length of first sequence in batch if output is a list/tuple
+                    try:
+                        tokens_generated = output[0].shape[1] - prompt_length
+                    except (IndexError, AttributeError):
+                        # If all else fails, just use the requested tokens
+                        print("Warning: Could not determine exact tokens generated, using requested tokens")
+                        tokens_generated = num_tokens
             else:
-                # Fallback
-                generated_texts = ["Could not decode output due to unexpected format"]
-        except Exception as e:
-            print(f"Warning: Could not decode batched output: {str(e)}")
-            generated_texts = [f"Error decoding output: {str(e)}"]
-    else:
-        try:
-            generated_texts = [tokenizer.decode(outputs[-1][0], skip_special_tokens=True)]
-        except Exception as e:
-            print(f"Warning: Could not decode output: {str(e)}")
-            generated_texts = [f"Error decoding output: {str(e)}"]
-    
-    print(f"\nGenerated text (from final run):")
-    for i, text in enumerate(generated_texts):
+                tokens_generated = output.shape[1] - prompt_length
+                
+            tokens_per_second = tokens_generated / time_taken
+            
+            all_times.append(time_taken)
+            all_tokens_per_second.append(tokens_per_second)
+            
+            print(f"  Run {run+1}: {tokens_per_second:.2f} tokens/sec ({time_taken:.2f}s)")
+            
+            # Small pause between runs to reduce thermal effects
+            if run < num_runs - 1:
+                time.sleep(1.0)
+        
+        # Calculate statistics
+        avg_time = sum(all_times) / len(all_times)
+        avg_tokens_per_second = sum(all_tokens_per_second) / len(all_tokens_per_second)
+        
+        # Calculate variance/std dev if we have multiple runs
+        if len(all_tokens_per_second) > 1:
+            variance = sum((x - avg_tokens_per_second) ** 2 for x in all_tokens_per_second) / len(all_tokens_per_second)
+            std_dev = variance ** 0.5
+            std_dev_percent = (std_dev / avg_tokens_per_second) * 100
+        else:
+            std_dev = 0
+            std_dev_percent = 0
+        
+        # Get the generated text from the last run
         if batch_size > 1:
-            print(f"\n--- Sample {i+1}/{batch_size} ---")
-        print(text)
-    
-    print(f"\nBenchmark statistics ({num_runs} runs):")
-    print(f"Tokens generated per run: {num_tokens}")
-    print(f"Average time: {avg_time:.2f} seconds")
-    print(f"Average tokens per second: {avg_tokens_per_second:.2f}")
-    print(f"Standard deviation: {std_dev:.2f} tokens/sec ({std_dev_percent:.2f}%)")
-    print(f"Min: {min(all_tokens_per_second):.2f} tokens/sec")
-    print(f"Max: {max(all_tokens_per_second):.2f} tokens/sec")
-    
-    # Return stats
-    return {
-        "kernel_mode": kernel_mode,
-        "kernel_info": kernel_info,
-        "prompt_length": prompt_length,
-        "tokens_generated": num_tokens,
-        "avg_time_taken": avg_time,
-        "avg_tokens_per_second": avg_tokens_per_second,
-        "std_dev": std_dev,
-        "std_dev_percent": std_dev_percent,
-        "min_tokens_per_second": min(all_tokens_per_second),
-        "max_tokens_per_second": max(all_tokens_per_second),
-        "all_times": all_times,
-        "all_tokens_per_second": all_tokens_per_second,
-        "load_time": load_time,
-        "device": str(device),
-        "generated_texts": generated_texts,
-        "num_runs": num_runs,
-        "batch_size": batch_size
-    }
+            try:
+                if hasattr(outputs[-1], 'shape'):
+                    # Single tensor with batch dimension
+                    generated_texts = [tokenizer.decode(outputs[-1][i], skip_special_tokens=True) 
+                                      for i in range(min(batch_size, outputs[-1].shape[0]))]
+                elif isinstance(outputs[-1], (list, tuple)):
+                    # List of tensors
+                    generated_texts = [tokenizer.decode(out, skip_special_tokens=True) 
+                                      for out in outputs[-1][:batch_size]]
+                else:
+                    # Fallback
+                    generated_texts = ["Could not decode output due to unexpected format"]
+            except Exception as e:
+                print(f"Warning: Could not decode batched output: {str(e)}")
+                generated_texts = [f"Error decoding output: {str(e)}"]
+        else:
+            try:
+                generated_texts = [tokenizer.decode(outputs[-1][0], skip_special_tokens=True)]
+            except Exception as e:
+                print(f"Warning: Could not decode output: {str(e)}")
+                generated_texts = [f"Error decoding output: {str(e)}"]
+        
+        print(f"\nGenerated text (from final run):")
+        for i, text in enumerate(generated_texts):
+            if batch_size > 1:
+                print(f"\n--- Sample {i+1}/{batch_size} ---")
+            print(text)
+        
+        print(f"\nBenchmark statistics ({num_runs} runs):")
+        print(f"Tokens generated per run: {num_tokens}")
+        print(f"Average time: {avg_time:.2f} seconds")
+        print(f"Average tokens per second: {avg_tokens_per_second:.2f}")
+        print(f"Standard deviation: {std_dev:.2f} tokens/sec ({std_dev_percent:.2f}%)")
+        print(f"Min: {min(all_tokens_per_second):.2f} tokens/sec")
+        print(f"Max: {max(all_tokens_per_second):.2f} tokens/sec")
+        
+        # Return stats
+        return {
+            "kernel_mode": kernel_mode,
+            "kernel_info": kernel_info,
+            "prompt_length": prompt_length,
+            "tokens_generated": num_tokens,
+            "avg_time_taken": avg_time,
+            "avg_tokens_per_second": avg_tokens_per_second,
+            "std_dev": std_dev,
+            "std_dev_percent": std_dev_percent,
+            "min_tokens_per_second": min(all_tokens_per_second),
+            "max_tokens_per_second": max(all_tokens_per_second),
+            "all_times": all_times,
+            "all_tokens_per_second": all_tokens_per_second,
+            "load_time": load_time,
+            "device": str(device),
+            "generated_texts": generated_texts,
+            "num_runs": num_runs,
+            "batch_size": batch_size
+        }
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        print(f"Model device: {device}")
+        if batch_size > 1:
+            print(f"Input device: {input_ids.device}")
+            print(f"Attention mask device: {attention_mask.device}")
+        else:
+            print(f"Input device: {input_ids.device}")
+            
+        # Return error information
+        return {
+            "kernel_mode": kernel_mode,
+            "error": str(e),
+            "device": str(device),
+            "load_time": load_time
+        }
 
 def compare_kernels(num_tokens=100, temperature=0.7, prompt=None, num_runs=3, warmup_tokens=30, batch_size=1):
     """Compare stock vs hybrid kernels and print a summary."""
@@ -639,125 +832,6 @@ def compare_kernels(num_tokens=100, temperature=0.7, prompt=None, num_runs=3, wa
         print(f"{i+1:4} | {stock_run:16.2f} | {hybrid_run:16.2f} | {run_speedup:+8.2f}%")
     
     return results
-
-def simple_generation(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=None, batch_size=1):
-    """
-    Simple text generation without benchmarking.
-    
-    Args:
-        kernel_mode: 'stock', 'hybrid', or 'auto' (uses hardware detection)
-        num_tokens: Number of tokens to generate
-        temperature: Temperature for generation
-        prompt: Text prompt to use
-        batch_size: Batch size for generation
-    
-    Returns:
-        Generated text
-    """
-    # First verify the environment
-    verify_environment()
-    
-    # Use proper HuggingFace model ID
-    model_name = "NX-AI/xLSTM-7b"
-    
-    # Set default prompt if none provided
-    if prompt is None:
-        prompt = "In a world where technology and nature coexist,"
-    
-    # Clean up any previous environment variable settings
-    for var in ["XLSTM_FORCE_STOCK_KERNELS", "DISABLE_AMD_OPTIMIZATIONS", 
-               "FORCE_AMD_DETECTION", "AMD_CDNA3_OPTIMIZATIONS", 
-               "AMD_PREFER_HYBRID_KERNELS", "XLSTM_OPTIMIZE_BATCH"]:
-        if var in os.environ:
-            del os.environ[var]
-    
-    # Enable optimizations based on kernel mode
-    optimizations_enabled = enable_optimizations(kernel_mode)
-    
-    # Verify environment after setting variables
-    print("Environment variables set for this run:")
-    for var in ["XLSTM_FORCE_STOCK_KERNELS", "DISABLE_AMD_OPTIMIZATIONS", 
-               "FORCE_AMD_DETECTION", "AMD_CDNA3_OPTIMIZATIONS", 
-               "AMD_PREFER_HYBRID_KERNELS", "XLSTM_OPTIMIZE_BATCH"]:
-        if var in os.environ:
-            print(f"  {var}={os.environ[var]}")
-    
-    # Load tokenizer
-    print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    
-    # Ensure the tokenizer has a padding token for batch processing
-    if tokenizer.pad_token is None:
-        print("Setting pad_token to eos_token for batch processing")
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    # Load model
-    print("Loading model...")
-    start_load = time.time()
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16,
-        device_map="auto"
-    )
-    load_time = time.time() - start_load
-    
-    # Print model info
-    device = next(model.parameters()).device
-    print(f"Model loaded on {device} in {load_time:.2f} seconds")
-    
-    # Attempt to manually set kernels based on mode
-    kernel_set = manually_set_kernels(model, kernel_mode)
-    if kernel_set:
-        print(f"Successfully set {kernel_mode} kernels manually")
-    
-    print(f"Prompt: {prompt}")
-    
-    # Handle batched inputs if needed
-    if batch_size > 1:
-        print(f"Using batch size: {batch_size}")
-        # Repeat the prompt for batched generation
-        prompts = [prompt] * batch_size
-        # Tokenize with padding
-        inputs = tokenizer(prompts, return_tensors="pt", padding=True)
-        input_ids = inputs.input_ids.to(model.device)
-        attention_mask = inputs.attention_mask.to(model.device)
-    else:
-        # Single prompt processing
-        input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
-        attention_mask = None
-    
-    # Generate
-    print(f"Generating {num_tokens} tokens with temperature {temperature}...")
-    start_time = time.time()
-    
-    output = model.generate(
-        input_ids, 
-        attention_mask=attention_mask,
-        max_new_tokens=num_tokens,
-        do_sample=True,
-        temperature=temperature
-    )
-    
-    end_time = time.time()
-    time_taken = end_time - start_time
-    
-    # Get the generated text
-    if batch_size > 1:
-        generated_texts = [tokenizer.decode(out, skip_special_tokens=True) for out in output]
-    else:
-        generated_texts = [tokenizer.decode(output[0], skip_special_tokens=True)]
-    
-    # Print results
-    print(f"\nGeneration completed in {time_taken:.2f} seconds")
-    print(f"Average speed: {num_tokens / time_taken:.2f} tokens/sec")
-    
-    print("\nGenerated text:")
-    for i, text in enumerate(generated_texts):
-        if batch_size > 1:
-            print(f"\n--- Sample {i+1}/{batch_size} ---")
-        print(text)
-    
-    return generated_texts
 
 def print_usage():
     """Print script usage information with examples."""
