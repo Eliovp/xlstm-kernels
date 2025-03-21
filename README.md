@@ -310,7 +310,7 @@ This repository contains optimized kernels for the [xLSTM library](https://githu
 
 ## Setup Options
 
-### Option 1: Install from GitHub (Recommended)
+### Option 1: Install using the installation script (Recommended)
 
 This will install both the AMD-optimized kernels and the modified xLSTM library:
 
@@ -319,29 +319,46 @@ This will install both the AMD-optimized kernels and the modified xLSTM library:
 git clone https://github.com/Eliovp/xlstm-kernels.git
 cd xlstm-kernels
 
-# Install the package (this will automatically install the modified xLSTM library as a dependency)
-pip install -e .
+# Run the installation script
+python install.py
 ```
 
-### Option 2: Development Installation
+### Option 2: Use setup.py directly
 
-If you want to modify the code or contribute:
+Our setup.py file has built-in commands to install both packages:
+
+```bash
+# Clone the repository
+git clone https://github.com/Eliovp/xlstm-kernels.git
+cd xlstm-kernels
+
+# Install both packages (xlstm-kernels and the AMD-optimized xLSTM)
+python setup.py install
+
+# For development mode:
+python setup.py develop
+```
+
+### Option 3: Manual Installation
+
+If you prefer to install the packages manually:
 
 ```bash
 # Clone the repositories
 git clone https://github.com/Eliovp/xlstm-kernels.git
 cd xlstm-kernels
 
-# Install in development mode
+# Install the kernels package
 pip install -e .
 
-# If you also want to modify the xLSTM library
-git clone https://github.com/Eliovp/xlstm.git
-cd xlstm
+# Clone and install the xLSTM library
+git clone https://github.com/Eliovp/xlstm.git xlstm_temp
+cd xlstm_temp
 pip install -e .
+cd ..
 ```
 
-### Option 3: Apply optimizations to an existing xLSTM installation
+### Option 4: Apply optimizations to an existing xLSTM installation
 
 If you already have the original xLSTM library installed separately and want to apply our optimizations to it:
 
