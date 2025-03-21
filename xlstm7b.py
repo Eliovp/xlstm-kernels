@@ -646,6 +646,127 @@ def print_usage():
     print("\nAdditional options can be viewed with:")
     print("python xlstm7b.py --help")
 
+def interactive_menu():
+    """Display an interactive menu for the user to select options."""
+    while True:
+        print("\nxLSTM-7B - Text Generation and Benchmarking Tool")
+        print("=" * 50)
+        print("\nPlease select an option:")
+        print("1. Generate text with xLSTM-7B")
+        print("2. Benchmark a specific kernel (stock/hybrid/auto)")
+        print("3. Compare stock vs hybrid kernels")
+        print("4. Exit")
+        
+        try:
+            choice = input("\nEnter your choice (1-4): ").strip()
+            
+            if choice == '1':  # Generate text
+                kernel = input("\nSelect kernel (stock/hybrid/auto) [default: auto]: ").strip().lower() or 'auto'
+                if kernel not in ['stock', 'hybrid', 'auto']:
+                    print(f"Invalid kernel choice: {kernel}. Using 'auto' instead.")
+                    kernel = 'auto'
+                
+                prompt = input("\nEnter your prompt [default: 'In a world where technology and nature coexist,']: ").strip()
+                prompt = prompt or "In a world where technology and nature coexist,"
+                
+                tokens = input("\nNumber of tokens to generate [default: 100]: ").strip()
+                tokens = int(tokens) if tokens.isdigit() else 100
+                
+                temp = input("\nTemperature (0.1-2.0) [default: 0.7]: ").strip()
+                try:
+                    temp = float(temp) if temp else 0.7
+                    if temp < 0.1 or temp > 2.0:
+                        print(f"Temperature {temp} out of recommended range (0.1-2.0), but proceeding anyway.")
+                except ValueError:
+                    print(f"Invalid temperature: {temp}. Using default 0.7.")
+                    temp = 0.7
+                
+                batch_size = input("\nBatch size [default: 1]: ").strip()
+                batch_size = int(batch_size) if batch_size.isdigit() and int(batch_size) > 0 else 1
+                
+                print(f"\nGenerating text with: kernel={kernel}, tokens={tokens}, temp={temp}, batch_size={batch_size}")
+                print(f"Prompt: '{prompt}'")
+                confirm = input("\nConfirm (y/n): ").strip().lower()
+                if confirm == 'y':
+                    simple_generation(kernel, tokens, temp, prompt, batch_size)
+                else:
+                    print("Generation cancelled.")
+            
+            elif choice == '2':  # Benchmark
+                kernel = input("\nSelect kernel to benchmark (stock/hybrid/auto) [default: hybrid]: ").strip().lower() or 'hybrid'
+                if kernel not in ['stock', 'hybrid', 'auto']:
+                    print(f"Invalid kernel choice: {kernel}. Using 'hybrid' instead.")
+                    kernel = 'hybrid'
+                
+                prompt = input("\nEnter your prompt [default: 'In a world where technology and nature coexist,']: ").strip()
+                prompt = prompt or "In a world where technology and nature coexist,"
+                
+                tokens = input("\nNumber of tokens to generate [default: 100]: ").strip()
+                tokens = int(tokens) if tokens.isdigit() else 100
+                
+                runs = input("\nNumber of benchmark runs [default: 3]: ").strip()
+                runs = int(runs) if runs.isdigit() and int(runs) > 0 else 3
+                
+                warmup = input("\nWarmup tokens [default: 30]: ").strip()
+                warmup = int(warmup) if warmup.isdigit() and int(warmup) > 0 else 30
+                
+                batch_size = input("\nBatch size [default: 1]: ").strip()
+                batch_size = int(batch_size) if batch_size.isdigit() and int(batch_size) > 0 else 1
+                
+                force_amd = input("\nForce AMD detection (y/n) [default: y]: ").strip().lower() or 'y'
+                if force_amd == 'y':
+                    os.environ["FORCE_AMD_DETECTION"] = "1"
+                    print("Forcing AMD detection for all runs")
+                
+                print(f"\nBenchmarking with: kernel={kernel}, tokens={tokens}, runs={runs}, warmup={warmup}, batch_size={batch_size}")
+                print(f"Prompt: '{prompt}'")
+                confirm = input("\nConfirm (y/n): ").strip().lower()
+                if confirm == 'y':
+                    run_benchmark(kernel, tokens, 0.7, prompt, runs, warmup, batch_size)
+                else:
+                    print("Benchmark cancelled.")
+            
+            elif choice == '3':  # Compare
+                prompt = input("\nEnter your prompt [default: 'In a world where technology and nature coexist,']: ").strip()
+                prompt = prompt or "In a world where technology and nature coexist,"
+                
+                tokens = input("\nNumber of tokens to generate [default: 100]: ").strip()
+                tokens = int(tokens) if tokens.isdigit() else 100
+                
+                runs = input("\nNumber of benchmark runs [default: 3]: ").strip()
+                runs = int(runs) if runs.isdigit() and int(runs) > 0 else 3
+                
+                warmup = input("\nWarmup tokens [default: 30]: ").strip()
+                warmup = int(warmup) if warmup.isdigit() and int(warmup) > 0 else 30
+                
+                batch_size = input("\nBatch size [default: 1]: ").strip()
+                batch_size = int(batch_size) if batch_size.isdigit() and int(batch_size) > 0 else 1
+                
+                force_amd = input("\nForce AMD detection (y/n) [default: y]: ").strip().lower() or 'y'
+                if force_amd == 'y':
+                    os.environ["FORCE_AMD_DETECTION"] = "1"
+                    print("Forcing AMD detection for all runs")
+                
+                print(f"\nComparing kernels with: tokens={tokens}, runs={runs}, warmup={warmup}, batch_size={batch_size}")
+                print(f"Prompt: '{prompt}'")
+                confirm = input("\nConfirm (y/n): ").strip().lower()
+                if confirm == 'y':
+                    compare_kernels(tokens, 0.7, prompt, runs, warmup, batch_size)
+                else:
+                    print("Comparison cancelled.")
+            
+            elif choice == '4':  # Exit
+                print("Exiting. Goodbye!")
+                break
+            
+            else:
+                print(f"Invalid choice: {choice}. Please enter 1, 2, 3, or 4.")
+        
+        except KeyboardInterrupt:
+            print("\nOperation cancelled by user. Returning to menu.")
+        except Exception as e:
+            print(f"\nAn error occurred: {str(e)}")
+
 def main():
     """Main entry point for the script."""
     # Create argument parser
@@ -661,7 +782,7 @@ def main():
     )
     
     # Add arguments
-    parser.add_argument('--mode', type=str, default='help', 
+    parser.add_argument('--mode', type=str, default=None, 
                       choices=['generate', 'benchmark', 'compare', 'help'],
                       help='Operation mode: generate text, benchmark performance, compare kernels, or show help')
     
@@ -693,8 +814,13 @@ def main():
     # Parse arguments
     args = parser.parse_args()
     
-    # Show help if requested or if no arguments provided
-    if args.mode == 'help' or len(sys.argv) == 1:
+    # If no mode specified, launch interactive menu
+    if args.mode is None and len(sys.argv) == 1:
+        interactive_menu()
+        return
+    
+    # If help mode or no arguments, show usage
+    if args.mode == 'help':
         print_usage()
         return
     
