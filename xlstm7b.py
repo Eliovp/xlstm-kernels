@@ -22,17 +22,58 @@ try:
     AMD_SUPPORT = True
 except ImportError:
     AMD_SUPPORT = False
+    print("WARNING: AMD optimizations module could not be imported")
     
     def is_amd():
+        """Fallback for AMD detection"""
+        # Try alternative methods to detect AMD GPUs
+        try:
+            import torch
+            if hasattr(torch, '_C') and hasattr(torch._C, '_TORCH_CUDA_VERSION'):
+                # Check if this is ROCm/HIP build of PyTorch
+                if 'rocm' in torch.__version__.lower() or 'hip' in torch.__version__.lower():
+                    return True
+            
+            # Check device name for AMD indicators
+            if torch.cuda.is_available():
+                device_name = torch.cuda.get_device_name(0).lower()
+                if any(name in device_name for name in ['amd', 'instinct', 'mi', 'cdna', 'radeon']):
+                    return True
+        except:
+            pass
+        
+        # Check environment variables
+        import os
+        if os.environ.get("FORCE_AMD_DETECTION") == "1":
+            print("AMD detection forced via environment variable")
+            return True
+        
         return False
     
     def is_cdna3():
+        """Fallback for CDNA3 architecture detection"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device_name = torch.cuda.get_device_name(0).lower()
+                if 'mi300' in device_name or 'mi200' in device_name:
+                    return True
+        except:
+            pass
         return False
     
     def enable_amd_optimizations():
-        print("AMD optimizations not available")
+        """Fallback for enabling AMD optimizations"""
+        print("AMD optimizations not available - using standard implementation")
         
     def get_hip_device_count():
+        """Fallback for HIP device count"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return torch.cuda.device_count()
+        except:
+            pass
         return 0
 
 # Global AMD detection override
@@ -49,6 +90,79 @@ def is_amd_override(override=None):
     """
     global _amd_override
     _amd_override = override
+
+def enable_optimizations(kernel_mode):
+    """
+    Enable optimizations based on kernel mode and hardware detection.
+    
+    Args:
+        kernel_mode: 'stock', 'hybrid', or 'auto'
+    
+    Returns:
+        bool: True if optimizations were enabled, False otherwise
+    """
+    # Set kernel mode environment variables if needed
+    if kernel_mode == "stock":
+        print("\n===== Using stock (original) kernels =====")
+        # Force native implementation regardless of hardware
+        os.environ["FORCE_AMD_DETECTION"] = "0"
+        os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "1"
+        os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "1"
+        # Override AMD detection for this run
+        is_amd_override(False)
+        return False
+        
+    elif kernel_mode == "hybrid":
+        print("\n===== Using AMD hybrid-optimized kernels =====")
+        # Force AMD optimizations to be used
+        os.environ["FORCE_AMD_DETECTION"] = "1"
+        os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "0"
+        os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "0"
+        # Additional optimizations
+        os.environ["AMD_CDNA3_OPTIMIZATIONS"] = "1"
+        os.environ["AMD_PREFER_HYBRID_KERNELS"] = "1"
+        os.environ["XLSTM_OPTIMIZE_BATCH"] = "1"
+        # Override AMD detection for this run
+        is_amd_override(True)
+        
+        # Explicitly check if we have the optimization module
+        if AMD_SUPPORT:
+            print("Enabling AMD optimizations...")
+            enable_amd_optimizations()
+            
+            # Load the triton kernels explicitly
+            try:
+                # Try to import and initialize triton kernels
+                import mlstm_kernels.triton.chunkwise
+                from mlstm_kernels.torch import get_mlstm_kernel
+                print("Successfully loaded AMD-optimized kernels")
+                return True
+            except ImportError as e:
+                print(f"Warning: Could not load triton kernels: {e}")
+                print("Falling back to standard implementation")
+                return False
+        else:
+            print("AMD optimization module not available")
+            return False
+            
+    else:  # auto
+        print("\n===== Using automatic kernel detection =====")
+        # Use hardware detection (default)
+        is_amd_override(None)
+        
+        # Detect hardware and enable optimizations if appropriate
+        hardware_is_amd = is_amd() if _amd_override is None else _amd_override
+        if hardware_is_amd and AMD_SUPPORT:
+            print("AMD GPU detected, enabling optimizations...")
+            os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "0"
+            os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "0"
+            os.environ["AMD_CDNA3_OPTIMIZATIONS"] = "1"
+            os.environ["AMD_PREFER_HYBRID_KERNELS"] = "1"
+            enable_amd_optimizations()
+            return True
+        else:
+            print("Using stock kernels based on hardware detection")
+            return False
 
 def manually_set_kernels(model, kernel_mode="auto"):
     """
@@ -209,33 +323,11 @@ def run_benchmark(kernel_mode="auto", num_tokens=100, temperature=0.7, prompt=No
         if var in os.environ:
             del os.environ[var]
     
-    # Set kernel mode environment variables if needed
-    if kernel_mode == "stock":
-        print("\n===== Testing with stock (original) kernels =====")
-        # Force native implementation regardless of hardware
-        os.environ["FORCE_AMD_DETECTION"] = "0"
-        os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "1"
-        os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "1"
-        # Override AMD detection for this run
-        is_amd_override(False)
-    elif kernel_mode == "hybrid":
-        print("\n===== Testing with AMD hybrid-optimized kernels =====")
-        # Force AMD optimizations to be used
-        os.environ["FORCE_AMD_DETECTION"] = "1"
-        os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "0"
-        os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "0"
-        # Additional optimizations
-        os.environ["AMD_CDNA3_OPTIMIZATIONS"] = "1"
-        os.environ["AMD_PREFER_HYBRID_KERNELS"] = "1"
-        os.environ["XLSTM_OPTIMIZE_BATCH"] = "1"
-        # Override AMD detection for this run
-        is_amd_override(True)
-        # Explicitly enable AMD optimizations
-        enable_amd_optimizations()
-    else:  # auto
-        print("\n===== Testing with automatic kernel detection =====")
-        # Use hardware detection (default)
-        is_amd_override(None)
+    # Enable optimizations based on kernel mode
+    optimizations_enabled = enable_optimizations(kernel_mode)
+    if kernel_mode == "hybrid" and not optimizations_enabled:
+        print("WARNING: Hybrid mode selected but optimizations could not be enabled.")
+        print("Performance may be suboptimal.")
     
     # Verify environment after setting variables
     print("Environment variables set for this run:")
@@ -486,6 +578,12 @@ def compare_kernels(num_tokens=100, temperature=0.7, prompt=None, num_runs=3, wa
     """Compare stock vs hybrid kernels and print a summary."""
     results = []
     
+    # Try to load optimizations before running
+    if not AMD_SUPPORT:
+        print("\n⚠️ WARNING: AMD optimizations module could not be imported.")
+        print("Hybrid kernel benchmark may not show expected performance improvements.")
+        print("Ensure 'mlstm_kernels.triton.amd_optimizations' is properly installed.\n")
+    
     # Test stock kernels
     stock_results = run_benchmark("stock", num_tokens, temperature, prompt, num_runs, warmup_tokens, batch_size)
     results.append(stock_results)
@@ -573,33 +671,16 @@ def simple_generation(kernel_mode="auto", num_tokens=100, temperature=0.7, promp
         if var in os.environ:
             del os.environ[var]
     
-    # Set kernel mode environment variables if needed
-    if kernel_mode == "stock":
-        print("\n===== Generating with stock (original) kernels =====")
-        # Force native implementation regardless of hardware
-        os.environ["FORCE_AMD_DETECTION"] = "0"
-        os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "1"
-        os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "1"
-        # Override AMD detection for this run
-        is_amd_override(False)
-    elif kernel_mode == "hybrid":
-        print("\n===== Generating with AMD hybrid-optimized kernels =====")
-        # Force AMD optimizations to be used
-        os.environ["FORCE_AMD_DETECTION"] = "1"
-        os.environ["XLSTM_FORCE_STOCK_KERNELS"] = "0"
-        os.environ["DISABLE_AMD_OPTIMIZATIONS"] = "0"
-        # Additional optimizations
-        os.environ["AMD_CDNA3_OPTIMIZATIONS"] = "1"
-        os.environ["AMD_PREFER_HYBRID_KERNELS"] = "1"
-        os.environ["XLSTM_OPTIMIZE_BATCH"] = "1"
-        # Override AMD detection for this run
-        is_amd_override(True)
-        # Explicitly enable AMD optimizations
-        enable_amd_optimizations()
-    else:  # auto
-        print("\n===== Generating with automatic kernel detection =====")
-        # Use hardware detection (default)
-        is_amd_override(None)
+    # Enable optimizations based on kernel mode
+    optimizations_enabled = enable_optimizations(kernel_mode)
+    
+    # Verify environment after setting variables
+    print("Environment variables set for this run:")
+    for var in ["XLSTM_FORCE_STOCK_KERNELS", "DISABLE_AMD_OPTIMIZATIONS", 
+               "FORCE_AMD_DETECTION", "AMD_CDNA3_OPTIMIZATIONS", 
+               "AMD_PREFER_HYBRID_KERNELS", "XLSTM_OPTIMIZE_BATCH"]:
+        if var in os.environ:
+            print(f"  {var}={os.environ[var]}")
     
     # Load tokenizer
     print("Loading tokenizer...")
